@@ -46,7 +46,7 @@ _觉得有点意思的话 别忘了点个🌟_
 
 ## 如何集成NextChat
 
-填 接口地址(ip:端口/域名) 及 API-Key(`PROXY_SECRET`),其它的随便填随便选。
+填 接口地址(ip:端口/域名) 及 API-Key(`API_SECRET`),其它的随便填随便选。
 
 > 如果自己没有搭建NextChat面板,这里有个已经搭建好的可以使用 [NeatChat](https://ai.aytsao.cn/)
 
@@ -54,7 +54,7 @@ _觉得有点意思的话 别忘了点个🌟_
 
 ## 如何集成one-api
 
-填 `BaseURL`(ip:端口/域名) 及 密钥(`PROXY_SECRET`),其它的随便填随便选。
+填 `BaseURL`(ip:端口/域名) 及 密钥(`API_SECRET`),其它的随便填随便选。
 
 <span><img src="docs/img3.png" width="800"/></span>
 
