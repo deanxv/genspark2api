@@ -15,17 +15,17 @@ import (
 
 func main() {
 	logger.SetupLogger()
-	logger.SysLog(fmt.Sprintf("genspark2api %s started", common.Version))
+	logger.SysLog(fmt.Sprintf("genspark2api %s starting...", common.Version))
 
 	check.CheckEnvVariable()
 
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	if config.DebugEnabled {
-		logger.SysLog("running in debug mode")
-	}
+
 	var err error
+
+	common.InitTokenEncoders()
 
 	server := gin.New()
 	server.Use(gin.Recovery())
@@ -37,8 +37,17 @@ func main() {
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
 	}
+
+	if config.DebugEnabled {
+		logger.SysLog("running in DEBUG mode.")
+	}
+
+	logger.SysLog("genspark2api start success. enjoy it! ^_^\n")
+
 	err = server.Run(":" + port)
+
 	if err != nil {
 		logger.FatalLog("failed to start HTTP server: " + err.Error())
 	}
+
 }

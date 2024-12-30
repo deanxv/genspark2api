@@ -41,7 +41,6 @@ type OpenAIChatCompletionRequest struct {
 
 // ChatForOpenAI 处理OpenAI聊天请求
 func ChatForOpenAI(c *gin.Context) {
-
 	client := cycletls.Init()
 	defer safeClose(client)
 
@@ -132,8 +131,8 @@ func ChatForOpenAI(c *gin.Context) {
 			} else {
 
 				jsonBytes, _ := json.Marshal(openAIReq.Messages)
-				promptTokens := common.CountTokens(string(jsonBytes))
-				completionTokens := common.CountTokens(strings.Join(content, "\n"))
+				promptTokens := common.CountTokenText(string(jsonBytes), openAIReq.Model)
+				completionTokens := common.CountTokenText(strings.Join(content, "\n"), openAIReq.Model)
 
 				finishReason := "stop"
 				// 创建并返回 OpenAIChatCompletionResponse 结构
@@ -330,22 +329,34 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 		return nil, fmt.Errorf("processMessages err: %v", err)
 	}
 
+	currentQueryString := fmt.Sprintf("type=%s", chatType)
+	// 查找 key 对应的 value
+	if chatId, ok := config.ModelChatMap[openAIReq.Model]; ok {
+		currentQueryString = fmt.Sprintf("id=%s&type=%s", chatId, chatType)
+	}
+
+	models := []string{openAIReq.Model}
+	if !lo.Contains(common.TextModelList, openAIReq.Model) {
+		models = common.MixtureModelList
+	}
+
 	// 创建请求体
 	return map[string]interface{}{
-		"type":                 chatType,
-		"current_query_string": "type=chat",
+		"type": chatType,
+		//"current_query_string": fmt.Sprintf("&type=%s", chatType),
+		"current_query_string": currentQueryString,
 		"messages":             openAIReq.Messages,
-		//"user_s_input":         openAIReq.Messages[len(openAIReq.Messages)-1].Content,
+		//"user_s_input":  "100字的量子力学文章",
 		"action_params": map[string]interface{}{},
 		"extra_data": map[string]interface{}{
-			"models":                 []string{openAIReq.Model},
+			"models":                 models,
 			"run_with_another_model": false,
 			"writingContent":         nil,
 		},
+		//"g_recaptcha_token": helper.GetTimeString(),
 	}, nil
 }
-
-func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.OpenAIImagesGenerationRequest) map[string]interface{} {
+func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.OpenAIImagesGenerationRequest) (map[string]interface{}, error) {
 
 	if openAIReq.Model == "dall-e-3" {
 		openAIReq.Model = "dalle-3"
@@ -364,11 +375,63 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 	}
 
 	// 创建消息数组
-	messages := []map[string]interface{}{
-		{
-			"role":    "user",
-			"content": openAIReq.Prompt,
-		},
+	var messages []map[string]interface{}
+
+	if openAIReq.Image != "" {
+		var base64Data string
+
+		if strings.HasPrefix(openAIReq.Image, "http://") || strings.HasPrefix(openAIReq.Image, "https://") {
+			// 下载文件
+			bytes, err := fetchImageBytes(openAIReq.Image)
+			if err != nil {
+				logger.Errorf(c.Request.Context(), fmt.Sprintf("fetchImageBytes err  %v\n", err))
+				return nil, fmt.Errorf("fetchImageBytes err  %v\n", err)
+			}
+
+			contentType := http.DetectContentType(bytes)
+			if strings.HasPrefix(contentType, "image/") {
+				// 是图片类型，转换为base64
+				base64Data = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(bytes)
+			}
+		} else if common.IsImageBase64(openAIReq.Image) {
+			// 如果已经是 base64 格式
+			if !strings.HasPrefix(openAIReq.Image, "data:image") {
+				base64Data = "data:image/jpeg;base64," + openAIReq.Image
+			} else {
+				base64Data = openAIReq.Image
+			}
+		}
+
+		// 构建包含图片的消息
+		if base64Data != "" {
+			messages = []map[string]interface{}{
+				{
+					"role": "user",
+					"content": []map[string]interface{}{
+						{
+							"type": "image_url",
+							"image_url": map[string]interface{}{
+								"url": base64Data,
+							},
+						},
+						{
+							"type": "text",
+							"text": openAIReq.Prompt,
+						},
+					},
+				},
+			}
+		}
+	}
+
+	// 如果没有图片或处理图片失败，使用纯文本消息
+	if len(messages) == 0 {
+		messages = []map[string]interface{}{
+			{
+				"role":    "user",
+				"content": openAIReq.Prompt,
+			},
+		}
 	}
 
 	// 创建请求体
@@ -384,13 +447,13 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 			"imageModelMap":  map[string]interface{}{},
 			"writingContent": nil,
 		},
-	}
+	}, nil
 }
 
 // createStreamResponse 创建流式响应
 func createStreamResponse(responseId, modelName string, jsonData []byte, delta model.OpenAIDelta, finishReason *string) model.OpenAIChatCompletionResponse {
-	promptTokens := common.CountTokens(string(jsonData))
-	completionTokens := common.CountTokens(delta.Content)
+	promptTokens := common.CountTokenText(string(jsonData), modelName)
+	completionTokens := common.CountTokenText(delta.Content, modelName)
 	return model.OpenAIChatCompletionResponse{
 		ID:      responseId,
 		Object:  "chat.completion.chunk",
@@ -425,7 +488,7 @@ func handleStreamResponse(c *gin.Context, sseChan <-chan cycletls.SSEResponse, r
 			continue
 		}
 
-		logger.Debug(c.Request.Context(), data)
+		logger.Debug(c.Request.Context(), strings.TrimSpace(data))
 
 		if common.IsCloudflareChallenge(data) {
 			logger.Errorf(c.Request.Context(), "Detected Cloudflare Challenge Page")
@@ -525,6 +588,7 @@ func makeRequest(client cycletls.CycleTLS, jsonData []byte, cookie string, isStr
 
 	return client.Do(apiEndpoint, cycletls.Options{
 		Timeout: 10 * 60 * 60,
+		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Body:    string(jsonData),
 		Method:  "POST",
 		Headers: map[string]string{
@@ -543,6 +607,7 @@ func makeImageRequest(client cycletls.CycleTLS, jsonData []byte, cookie string) 
 
 	return client.Do(apiEndpoint, cycletls.Options{
 		Timeout: 10 * 60 * 60,
+		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Body:    string(jsonData),
 		Method:  "POST",
 		Headers: map[string]string{
@@ -556,10 +621,20 @@ func makeImageRequest(client cycletls.CycleTLS, jsonData []byte, cookie string) 
 }
 
 func makeDeleteRequest(client cycletls.CycleTLS, cookie, projectId string) (cycletls.Response, error) {
+
+	// 不删除环境变量中的map中的对话
+
+	for _, v := range config.ModelChatMap {
+		if v == projectId {
+			return cycletls.Response{}, nil
+		}
+	}
+
 	accept := "application/json"
 
 	return client.Do(fmt.Sprintf(deleteEndpoint, projectId), cycletls.Options{
 		Timeout: 10 * 60 * 60,
+		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Method:  "GET",
 		Headers: map[string]string{
 			"Content-Type": "application/json",
@@ -577,6 +652,7 @@ func makeGetUploadUrlRequest(client cycletls.CycleTLS, cookie string) (cycletls.
 
 	return client.Do(fmt.Sprintf(uploadEndpoint), cycletls.Options{
 		Timeout: 10 * 60 * 60,
+		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Method:  "GET",
 		Headers: map[string]string{
 			"Content-Type": "application/json",
@@ -588,25 +664,26 @@ func makeGetUploadUrlRequest(client cycletls.CycleTLS, cookie string) (cycletls.
 	}, "GET")
 }
 
-func makeOptionsRequest(client cycletls.CycleTLS, uploadUrl string) (cycletls.Response, error) {
-	return client.Do(uploadUrl, cycletls.Options{
-		Method: "OPTIONS",
-		Headers: map[string]string{
-			"Accept":                         "*/*",
-			"Access-Control-Request-Headers": "x-ms-blob-type",
-			"Access-Control-Request-Method":  "PUT",
-			"Origin":                         "https://www.genspark.ai",
-			"Sec-Fetch-Dest":                 "empty",
-			"Sec-Fetch-Mode":                 "cors",
-			"Sec-Fetch-Site":                 "cross-site",
-		},
-		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-	}, "OPTIONS")
-}
+//func makeOptionsRequest(client cycletls.CycleTLS, uploadUrl string) (cycletls.Response, error) {
+//	return client.Do(uploadUrl, cycletls.Options{
+//		Method: "OPTIONS",
+//		Headers: map[string]string{
+//			"Accept":                         "*/*",
+//			"Access-Control-Request-Headers": "x-ms-blob-type",
+//			"Access-Control-Request-Method":  "PUT",
+//			"Origin":                         "https://www.genspark.ai",
+//			"Sec-Fetch-Dest":                 "empty",
+//			"Sec-Fetch-Mode":                 "cors",
+//			"Sec-Fetch-Site":                 "cross-site",
+//		},
+//		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+//	}, "OPTIONS")
+//}
 
 func makeUploadRequest(client cycletls.CycleTLS, uploadUrl string, fileBytes []byte) (cycletls.Response, error) {
 	return client.Do(uploadUrl, cycletls.Options{
 		Timeout: 10 * 60 * 60,
+		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Method:  "PUT",
 		Body:    string(fileBytes),
 		Headers: map[string]string{
@@ -619,8 +696,6 @@ func makeUploadRequest(client cycletls.CycleTLS, uploadUrl string, fileBytes []b
 			"Sec-Fetch-Mode": "cors",
 			"Sec-Fetch-Site": "cross-site",
 		},
-		Ja3:       "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513,29-23-24,0",
-		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	}, "PUT")
 }
 
@@ -646,6 +721,7 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 func makeStreamRequest(c *gin.Context, client cycletls.CycleTLS, jsonData []byte, cookie string) (<-chan cycletls.SSEResponse, error) {
 	options := cycletls.Options{
 		Timeout: 10 * 60 * 60,
+		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Body:    string(jsonData),
 		Method:  "POST",
 		Headers: map[string]string{
@@ -680,7 +756,7 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 	var content string
 	for scanner.Scan() {
 		line := scanner.Text()
-		logger.Debug(c.Request.Context(), line)
+		logger.Debug(c.Request.Context(), strings.TrimSpace(line))
 
 		if common.IsCloudflareChallenge(line) {
 			logger.Errorf(c.Request.Context(), "Detected Cloudflare Challenge Page")
@@ -711,8 +787,8 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 		return
 	}
 
-	promptTokens := common.CountTokens(string(jsonData))
-	completionTokens := common.CountTokens(content)
+	promptTokens := common.CountTokenText(string(jsonData), modelName)
+	completionTokens := common.CountTokenText(content, modelName)
 
 	finishReason := "stop"
 	// 创建并返回 OpenAIChatCompletionResponse 结构
@@ -794,7 +870,10 @@ func ImagesForOpenAI(c *gin.Context) {
 }
 
 func ImageProcess(c *gin.Context, client cycletls.CycleTLS, cookie string, openAIReq model.OpenAIImagesGenerationRequest) (*model.OpenAIImagesGenerationResponse, error) {
-	requestBody := createImageRequestBody(c, cookie, &openAIReq)
+	requestBody, err := createImageRequestBody(c, cookie, &openAIReq)
+	if err != nil {
+		return nil, err
+	}
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		//c.JSON(500, gin.H{"error": "Failed to marshal request body"})
@@ -926,6 +1005,7 @@ func pollTaskStatus(c *gin.Context, client cycletls.CycleTLS, taskIDs []string, 
 			// 发送请求
 			response, err := client.Do(url, cycletls.Options{
 				Timeout: 10 * 60 * 60,
+				Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 				Method:  "GET",
 				Headers: map[string]string{
 					"Cookie": cookie,

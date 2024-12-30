@@ -21,7 +21,7 @@ var UploadPath = "upload"
 func printHelp() {
 	fmt.Println("genspark2api" + Version + "")
 	fmt.Println("Copyright (C) 2024 Dean. All rights reserved.")
-	//fmt.Println("GitHub: https://github.com/deanxv/genspark2api ")
+	fmt.Println("GitHub: https://github.com/deanxv/genspark2api ")
 	fmt.Println("Usage: genspark2api [--port <port>] [--log-dir <log directory>] [--version] [--help]")
 }
 

@@ -10,6 +10,7 @@ headers = {
     'X-GitHub-Api-Version': '2022-11-28',
 }
 
+
 def get_stargazers(repo):
     page = 1
     _stargazers = {}

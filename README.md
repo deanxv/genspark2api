@@ -31,6 +31,8 @@ _觉得有点意思的话 别忘了点个🌟_
 - [x] 支持自定义请求头校验值(Authorization)
 - [x] 支持cookie池(随机)
 - [x] 可配置自动删除对话记录
+- [x] 可配置代理请求(环境变量`PROXY_URL`)
+- [x] 可配置Model绑定Chat(解决模型自动切换导致**降智**),详细请看[进阶配置](#进阶配置)。
 
 ### 接口文档:
 
@@ -100,8 +102,7 @@ deanxv/genspark2api
 
 其中`API_SECRET`、`GS_COOKIE`修改为自己的。
 
-如果上面的镜像无法拉取,可以尝试使用 GitHub 的 Docker 镜像,将上面的`deanxv/genspark2api`替换为
-`ghcr.io/deanxv/genspark2api`即可。
+如果上面的镜像无法拉取,可以尝试使用 GitHub 的 Docker 镜像,将上面的`deanxv/genspark2api`替换为`ghcr.io/deanxv/genspark2api`即可。
 
 ### 部署到第三方平台
 
@@ -146,18 +147,37 @@ Render 可以直接部署 docker 镜像,不需要 fork 仓库：[Render](https:/
 ### 环境变量
 
 1. `PORT=7055`  [可选]端口,默认为7055
-2. `API_SECRET=123456`  [可选]接口密钥-修改此行为请求头(Authorization)校验的值(同API-KEY)(多个请以,分隔)
-3. `GS_COOKIE=******`  cookie (多个请以,分隔)
-4. `AUTO_DEL_CHAT=0`  [可选]对话完成自动删除[0:关闭,1:开启]
-5. `REQUEST_RATE_LIMIT=60`  [可选]每分钟下的单ip请求速率限制,默认:60次/min
+2. `DEBUG=true`  [可选]DEBUG模式,可打印更多信息[true:打开、false:关闭]
+3. `API_SECRET=123456`  [可选]接口密钥-修改此行为请求头(Authorization)校验的值(同API-KEY)(多个请以,分隔)
+4. `GS_COOKIE=******`  cookie (多个请以,分隔)
+5. `AUTO_DEL_CHAT=0`  [可选]对话完成自动删除[0:关闭,1:开启]
+6. `REQUEST_RATE_LIMIT=60`  [可选]每分钟下的单ip请求速率限制,默认:60次/min
+7. `PROXY_URL=http://127.0.0.1:10801`  [可选]代理
+8. `MODEL_CHAT_MAP=claude-3-5-sonnet=a649******00fa,gpt-4o=su74******47hd`  [可选]Model绑定Chat(多个请以,分隔),详细请看[进阶配置](#进阶配置)
 
 ### cookie获取方式
 
 1. 打开**F12**开发者工具。
 2. 发起对话。
-3. 点击ask请求，请求头中的**cookie**即为环境变量**GS_COOKIE**所需值。(其中`session_id=f9c60******cb6d`
-       是必须的，其他内容可要可不要，即环境变量`GS_COOKIE=session_id=f9c60******cb6d`)
-       ![img.png](docs/img.png)
+3. 点击ask请求，请求头中的**cookie**即为环境变量**GS_COOKIE**所需值。
+
+> **【注】** 其中`session_id=f9c60******cb6d`是必须的，其他内容可要可不要，即环境变量`GS_COOKIE=session_id=f9c60******cb6d`
+
+
+
+![img.png](docs/img.png)
+
+## 进阶配置
+
+### 配置环境变量 MODEL_CHAT_MAP
+
+> 【作用】指定对话，解决模型自动切换导致降智问题。
+
+1. 打开**F12**开发者工具。
+2. 选择需要绑定的对话的模型(示例:`claude-3-5-sonnet`),发起对话。
+3. 点击ask请求，此时最上方url中的`id`(或响应中的`id`)即为此对话唯一id。
+   ![img.png](docs/img4.png)
+4. 配置环境变量 `MODEL_CHAT_MAP=claude-3-5-sonnet=3cdcc******474c5` (多个请以,分隔)
 
 ## 其他
 
