@@ -157,3 +157,45 @@ func IsCloudflareChallenge(data string) bool {
 
 	return false
 }
+
+func IsRateLimit(data string) bool {
+	if data == "Rate limit exceeded cf1" || data == "Rate limit exceeded cf2" {
+		return true
+	}
+
+	return false
+}
+
+func IsServiceUnavailablePage(data string) bool {
+	// 检查基本的 HTML 结构
+	htmlPattern := `^<!doctype html><html.*?><head>.*?</head><body.*?>.*?</body></html>`
+
+	// 检查 Service Unavailable 页面特征
+	suPatterns := []string{
+		`<title>Genspark</title>`,                           // 标题特征
+		`Service\s+Unavailable`,                             // 错误信息
+		`class="bb".*?class="s1".*?class="s2".*?class="s3"`, // 特征性类名结构
+		`genspark_logo\.png`,                                // Logo 图片
+		`gensparkpublicblob-cdn.*?\.azurefd\.net`,           // CDN 域名
+		`<div class="tt">Service Unavailable</div>`,         // 错误信息容器
+	}
+
+	// 首先检查整体 HTML 结构
+	matched, _ := regexp.MatchString(htmlPattern, strings.TrimSpace(data))
+	if !matched {
+		return false
+	}
+
+	// 检查特征模式，至少匹配其中的 3 个才认为是目标页面
+	matchCount := 0
+	for _, pattern := range suPatterns {
+		if matched, _ := regexp.MatchString(pattern, data); matched {
+			matchCount++
+		}
+	}
+
+	return matchCount >= 3
+}
+
+//<!doctype html><html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>Genspark</title><link rel="icon" href="https://gensparkpublicblob-cdn-e6g4btgjavb5a7gh.z03.azurefd.net/user-upload-image/manual/favicon.ico"><style>body,html{margin:0;padding:0;font-family:Arial}.bb{width:100vw;height:100vh;position:absolute;overflow:hidden}.logo img{margin:20px 0 0 24px;height:24px}.iw{display:flex;flex-direction:column;height:100vh;width:100%}.s1{position:absolute;top:0;left:0;margin-top:-5%;margin-left:15%;width:289px;height:289px;border-radius:289px;opacity:.6;background:radial-gradient(55.64% 49.84%,#2c10d6 0,rgba(44,16,214,.36) 100%);filter:blur(120px)}.s2{position:absolute;top:0;left:0;margin-top:10%;margin-left:50%;width:204.845px;height:204.845px;transform:rotate(-131.346deg);flex-shrink:0;background:radial-gradient(55.64% 49.84%,#7fd1ff 0,rgba(44,16,214,.36) 100%);filter:blur(120px)}.s3{position:absolute;bottom:0;right:0;margin-bottom:10%;margin-right:10%;width:251px;height:251px;border-radius:289.093px;background:radial-gradient(88.27% 88.27% at 90.98% 61.04%,#ce7fff 0,#ffe4af 100%);filter:blur(120px)}.cc{display:flex;justify-content:center;align-items:center;height:100%;width:100%}.hh{align-items:center;display:flex;width:100vw}.dd{margin-top:-200px}.tt{color:#000;text-align:center;font-size:40px;font-style:normal;font-weight:700}@media (max-width:800px){.tt{font-size:30px}}</style></head><body><div class="bb"><div class="s1"></div><div class="s2"></div><div class="s3"></div></div><div class="iw"><div class="hh"><div class="logo"><img src="https://gensparkpublicblob-cdn-e6g4btgjavb5a7gh.z03.azurefd.net/user-upload-image/manual/genspark_logo.png" alt="logo"></div></div><div class="cc"><div class="dd"><div class="tt">Service Unavailable</div></div></div></div></body></html>
+//<!doctype html><html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>Genspark</title><link rel="icon" href="https://gensparkpublicblob-cdn-e6g4btgjavb5a7gh.z03.azurefd.net/user-upload-image/manual/favicon.ico"><style>body,html{margin:0;padding:0;font-family:Arial}.bb{width:100vw;height:100vh;position:absolute;overflow:hidden}.logo img{margin:20px 0 0 24px;height:24px}.iw{display:flex;flex-direction:column;height:100vh;width:100%!}(MISSING).s1{position:absolute;top:0;left:0;margin-top:-5%!;(MISSING)margin-left:15%!;(MISSING)width:289px;height:289px;border-radius:289px;opacity:.6;background:radial-gradient(55.64%,#2c10d6 0,rgba(44,16,214,.36) 100%!)(MISSING);filter:blur(120px)}.s2{position:absolute;top:0;left:0;margin-top:10%!;(MISSING)margin-left:50%!;(MISSING)width:204.845px;height:204.845px;transform:rotate(-131.346deg);flex-shrink:0;background:radial-gradient(55.64%,#7fd1ff 0,rgba(44,16,214,.36) 100%!)(MISSING);filter:blur(120px)}.s3{position:absolute;bottom:0;right:0;margin-bottom:10%!;(MISSING)margin-right:10%!;(MISSING)width:251px;height:251px;border-radius:289.093px;background:radial-gradient(88.27% at 90.98%,#ce7fff 0,#ffe4af 100%!)(MISSING);filter:blur(120px)}.cc{display:flex;justify-content:center;align-items:center;height:100%!;(MISSING)width:100%!}(MISSING).hh{align-items:center;display:flex;width:100vw}.dd{margin-top:-200px}.tt{color:#000;text-align:center;font-size:40px;font-style:normal;font-weight:700}@media (max-width:800px){.tt{font-size:30px}}</style></head><body><div class="bb"><div class="s1"></div><div class="s2"></div><div class="s3"></div></div><div class="iw"><div class="hh"><div class="logo"><img src="https://gensparkpublicblob-cdn-e6g4btgjavb5a7gh.z03.azurefd.net/user-upload-image/manual/genspark_logo.png" alt="logo"></div></div><div class="cc"><div class="dd"><div class="tt">Service Unavailable</div></div></div></div></body></html>

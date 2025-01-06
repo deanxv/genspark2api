@@ -26,6 +26,7 @@ func main() {
 	var err error
 
 	common.InitTokenEncoders()
+	config.GlobalSessionManager = config.NewSessionManager()
 
 	server := gin.New()
 	server.Use(gin.Recovery())

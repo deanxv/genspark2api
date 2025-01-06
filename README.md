@@ -30,6 +30,7 @@ _觉得有点意思的话 别忘了点个🌟_
     - **dall-e-3**
 - [x] 支持自定义请求头校验值(Authorization)
 - [x] 支持cookie池(随机)
+- [x] 支持请求失败自动切换cookie重试(需配置cookie池)
 - [x] 可配置自动删除对话记录
 - [x] 可配置代理请求(环境变量`PROXY_URL`)
 - [x] 可配置Model绑定Chat(解决模型自动切换导致**降智**),详细请看[进阶配置](#进阶配置)。
@@ -150,10 +151,11 @@ Render 可以直接部署 docker 镜像,不需要 fork 仓库：[Render](https:/
 2. `DEBUG=true`  [可选]DEBUG模式,可打印更多信息[true:打开、false:关闭]
 3. `API_SECRET=123456`  [可选]接口密钥-修改此行为请求头(Authorization)校验的值(同API-KEY)(多个请以,分隔)
 4. `GS_COOKIE=******`  cookie (多个请以,分隔)
-5. `AUTO_DEL_CHAT=0`  [可选]对话完成自动删除[0:关闭,1:开启]
+5. `AUTO_DEL_CHAT=0`  [可选]对话完成自动删除(默认:0)[0:关闭,1:开启]
 6. `REQUEST_RATE_LIMIT=60`  [可选]每分钟下的单ip请求速率限制,默认:60次/min
 7. `PROXY_URL=http://127.0.0.1:10801`  [可选]代理
-8. `MODEL_CHAT_MAP=claude-3-5-sonnet=a649******00fa,gpt-4o=su74******47hd`  [可选]Model绑定Chat(多个请以,分隔),详细请看[进阶配置](#进阶配置)
+8. `AUTO_MODEL_CHAT_MAP_TYPE=1`  [可选]自动配置Model绑定Chat(默认:1)[0:关闭,1:开启]
+9. `MODEL_CHAT_MAP=claude-3-5-sonnet=a649******00fa,gpt-4o=su74******47hd`  [可选]Model绑定Chat(多个请以,分隔),详细请看[进阶配置](#进阶配置)
 
 ### cookie获取方式
 
@@ -164,11 +166,18 @@ Render 可以直接部署 docker 镜像,不需要 fork 仓库：[Render](https:/
 > **【注】** 其中`session_id=f9c60******cb6d`是必须的，其他内容可要可不要，即环境变量`GS_COOKIE=session_id=f9c60******cb6d`
 
 
-
 ![img.png](docs/img.png)
 
 ## 进阶配置
 
+### 解决模型自动切换导致降智问题
+
+#### 方案一 (默认启用此配置)【推荐】
+> 配置环境变量 **AUTO_MODEL_CHAT_MAP_TYPE=1**
+> 
+> 此配置下,会在调用模型时获取对话的id,并绑定模型。
+
+#### 方案二
 ### 配置环境变量 MODEL_CHAT_MAP
 
 > 【作用】指定对话，解决模型自动切换导致降智问题。
@@ -178,6 +187,21 @@ Render 可以直接部署 docker 镜像,不需要 fork 仓库：[Render](https:/
 3. 点击ask请求，此时最上方url中的`id`(或响应中的`id`)即为此对话唯一id。
    ![img.png](docs/img4.png)
 4. 配置环境变量 `MODEL_CHAT_MAP=claude-3-5-sonnet=3cdcc******474c5` (多个请以,分隔)
+
+## 报错排查
+
+> `Detected Cloudflare Challenge Page`
+> 
+被Cloudflare拦截出5s盾,可配置`PROXY_URL`。([IProyal](https://iproyal.cn/?r=244330))
+
+> `Genspark Service Unavailable`
+>
+Genspark官方服务不可用,请稍后再试。
+
+> `All cookies are temporarily unavailable.`
+>
+所有用户(cookie)均到达速率限制,更换用户cookie或稍后再试。
+
 
 ## 其他
 

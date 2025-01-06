@@ -13,6 +13,7 @@ func SetApiRouter(router *gin.Engine) {
 
 	router.GET("/")
 
+	//router.GET("/api/init/model/chat/map", controller.InitModelChatMap)
 	//https://api.openai.com/v1/images/generations
 	v1Router := router.Group("/v1")
 	v1Router.Use(middleware.OpenAIAuth())
