@@ -9,6 +9,7 @@ import (
 func SetApiRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
 	//router.Use(gzip.Gzip(gzip.DefaultCompression))
+	router.Use(middleware.IPBlacklistMiddleware())
 	router.Use(middleware.RequestRateLimit())
 
 	router.GET("/")

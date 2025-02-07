@@ -8,6 +8,7 @@ import (
 	logger "genspark2api/common/loggger"
 	"genspark2api/middleware"
 	"genspark2api/router"
+	"genspark2api/yescaptcha"
 	"github.com/gin-gonic/gin"
 	"os"
 	"strconv"
@@ -26,6 +27,8 @@ func main() {
 	var err error
 
 	common.InitTokenEncoders()
+	config.YescaptchaClient = yescaptcha.NewClient(config.YesCaptchaClientKey, nil)
+
 	config.GlobalSessionManager = config.NewSessionManager()
 
 	server := gin.New()

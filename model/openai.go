@@ -11,9 +11,51 @@ type OpenAIChatCompletionExtraRequest struct {
 	ChannelId *string `json:"channelId"`
 }
 
+type SessionState struct {
+	Models           []string `json:"models"`
+	Layers           int      `json:"layers"`
+	Answer           string   `json:"answer"`
+	AnswerIsFinished bool     `json:"answer_is_finished"`
+}
 type OpenAIChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role         string        `json:"role"`
+	Content      interface{}   `json:"content"`
+	IsPrompt     bool          `json:"is_prompt"`
+	SessionState *SessionState `json:"session_state"`
+}
+
+func (r *OpenAIChatCompletionRequest) SystemMessagesProcess(model string) {
+	if r.Messages == nil {
+		return
+	}
+
+	if model == "deep-seek-r1" {
+		for i := range r.Messages {
+			if r.Messages[i].Role == "system" {
+				r.Messages[i].Role = "user"
+			}
+			if r.Messages[i].Role == "assistant" {
+				r.Messages[i].IsPrompt = false
+				r.Messages[i].SessionState = &SessionState{
+					Models: []string{model},
+				}
+			}
+		}
+	}
+}
+
+func (r *OpenAIChatCompletionRequest) FilterUserMessage() {
+	if r.Messages == nil {
+		return
+	}
+
+	// 返回最后一个role为user的元素
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		if r.Messages[i].Role == "user" {
+			r.Messages = r.Messages[i:]
+			break
+		}
+	}
 }
 
 type OpenAIErrorResponse struct {
@@ -122,7 +164,7 @@ type OpenaiModelListResponse struct {
 	Data   []OpenaiModelResponse `json:"data"`
 }
 
-func (r OpenAIChatCompletionRequest) GetUserContent() []string {
+func (r *OpenAIChatCompletionRequest) GetUserContent() []string {
 	var userContent []string
 
 	for i := len(r.Messages) - 1; i >= 0; i-- {

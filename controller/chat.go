@@ -61,6 +61,14 @@ func ChatForOpenAI(c *gin.Context) {
 		return
 	}
 
+	// 模型映射
+	if openAIReq.Model == "deepseek-r1" {
+		openAIReq.Model = "deep-seek-r1"
+	}
+	if openAIReq.Model == "deepseek-v3" {
+		openAIReq.Model = "deep-seek-v3"
+	}
+
 	// 初始化cookie
 	cookieManager := config.NewCookieManager()
 	cookie, err := cookieManager.GetRandomCookie()
@@ -91,7 +99,7 @@ func ChatForOpenAI(c *gin.Context) {
 			c.JSON(500, gin.H{"error": "Failed to marshal request body"})
 			return
 		}
-		resp, err := ImageProcess(c, client, cookie, model.OpenAIImagesGenerationRequest{
+		resp, err := ImageProcess(c, client, model.OpenAIImagesGenerationRequest{
 			Model:  openAIReq.Model,
 			Prompt: openAIReq.GetUserContent()[0],
 		})
@@ -323,6 +331,8 @@ func fetchImageBytes(url string) ([]byte, error) {
 }
 
 func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, openAIReq *model.OpenAIChatCompletionRequest) (map[string]interface{}, error) {
+	openAIReq.SystemMessagesProcess(openAIReq.Model)
+
 	// 处理消息中的图像 URL
 	err := processMessages(c, client, cookie, openAIReq.Messages)
 	if err != nil {
@@ -331,12 +341,13 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 	}
 
 	currentQueryString := fmt.Sprintf("type=%s", chatType)
-	//currentQueryString := fmt.Sprintf("id=b44b385e-08d9-4858-b4bc-9077f39df9f4type=%s", chatType)
-	// 查找 key 对应的 value
+	//查找 key 对应的 value
 	if chatId, ok := config.ModelChatMap[openAIReq.Model]; ok {
 		currentQueryString = fmt.Sprintf("id=%s&type=%s", chatId, chatType)
 	} else if chatId, ok := config.GlobalSessionManager.GetChatID(cookie, openAIReq.Model); ok {
 		currentQueryString = fmt.Sprintf("id=%s&type=%s", chatId, chatType)
+	} else if openAIReq.Model == "deep-seek-r1" {
+		openAIReq.FilterUserMessage()
 	}
 
 	models := []string{openAIReq.Model}
@@ -344,23 +355,64 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 		models = common.MixtureModelList
 	}
 
+	//gRecaptchaToken := ""
+	//if config.YesCaptchaClientKey != "" {
+	//	// 创建上下文，设置超时
+	//	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	//	defer cancel()
+	//	// 准备请求参数
+	//	req := yescaptcha.RecaptchaV3Request{
+	//		WebsiteURL: "https://www.genspark.ai/",
+	//		WebsiteKey: "6Leq7KYqAAAAAGdd1NaUBJF9dHTPAKP7DcnaRc66",
+	//		PageAction: "copilot",
+	//	}
+	//
+	//	// 解决验证码
+	//	response, err := config.YescaptchaClient.SolveRecaptchaV3(ctx, req)
+	//	if err != nil {
+	//		return map[string]interface{}{}, err
+	//	}
+	//
+	//	gRecaptchaToken = response
+	//}
+
 	// 创建请求体
 	return map[string]interface{}{
 		"type": chatType,
 		//"current_query_string": fmt.Sprintf("&type=%s", chatType),
 		"current_query_string": currentQueryString,
 		"messages":             openAIReq.Messages,
-		//"user_s_input":  "100字的量子力学文章",
+		//"user_s_input":  "我刚刚问了什么问题？",
 		"action_params": map[string]interface{}{},
 		"extra_data": map[string]interface{}{
 			"models":                 models,
 			"run_with_another_model": false,
 			"writingContent":         nil,
 		},
-		//"g_recaptcha_token": helper.GetTimeString(),
+		//"g_recaptcha_token": gRecaptchaToken,
 	}, nil
 }
-func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.OpenAIImagesGenerationRequest) (map[string]interface{}, error) {
+func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.OpenAIImagesGenerationRequest, chatId string) (map[string]interface{}, error) {
+	//gRecaptchaToken := ""
+	//if config.YesCaptchaClientKey != "" {
+	//	// 创建上下文，设置超时
+	//	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	//	defer cancel()
+	//	// 准备请求参数
+	//	req := yescaptcha.RecaptchaV3Request{
+	//		WebsiteURL: "https://www.genspark.ai/",
+	//		WebsiteKey: "6Leq7KYqAAAAAGdd1NaUBJF9dHTPAKP7DcnaRc66",
+	//		PageAction: "copilot",
+	//	}
+	//
+	//	// 解决验证码
+	//	response, err := config.YescaptchaClient.SolveRecaptchaV3(ctx, req)
+	//	if err != nil {
+	//		return map[string]interface{}{}, err
+	//	}
+	//
+	//	gRecaptchaToken = response
+	//}
 
 	if openAIReq.Model == "dall-e-3" {
 		openAIReq.Model = "dalle-3"
@@ -437,11 +489,18 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 			},
 		}
 	}
+	var currentQueryString string
+	if len(chatId) != 0 {
+		currentQueryString = fmt.Sprintf("id=%s&type=%s", chatId, chatType)
+	} else {
+		currentQueryString = fmt.Sprintf("type=%s", chatId, chatType)
+	}
 
 	// 创建请求体
 	return map[string]interface{}{
-		"type":                 "COPILOT_MOA_IMAGE",
-		"current_query_string": "type=COPILOT_MOA_IMAGE",
+		"type": "COPILOT_MOA_IMAGE",
+		//"current_query_string": "type=COPILOT_MOA_IMAGE",
+		"current_query_string": currentQueryString,
 		"messages":             messages,
 		"user_s_input":         openAIReq.Prompt,
 		"action_params":        map[string]interface{}{},
@@ -451,6 +510,7 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 			"imageModelMap":  map[string]interface{}{},
 			"writingContent": nil,
 		},
+		//"g_recaptcha_token": gRecaptchaToken,
 	}, nil
 }
 
@@ -485,8 +545,12 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 		return nil
 	}
 
-	delta, ok := event["delta"].(string)
-
+	var delta string
+	if modelName == "o1" || modelName == "o3-mini-high" {
+		delta, ok = event["field_value"].(string)
+	} else {
+		delta, ok = event["delta"].(string)
+	}
 	if !ok {
 		return nil
 	}
@@ -544,19 +608,22 @@ func makeRequest(client cycletls.CycleTLS, jsonData []byte, cookie string, isStr
 
 // makeRequest 发送HTTP请求
 func makeImageRequest(client cycletls.CycleTLS, jsonData []byte, cookie string) (cycletls.Response, error) {
+
 	accept := "*/*"
 
 	return client.Do(apiEndpoint, cycletls.Options{
-		Timeout: 10 * 60 * 60,
-		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
-		Body:    string(jsonData),
-		Method:  "POST",
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
+		Timeout:   10 * 60 * 60,
+		Proxy:     config.ProxyUrl, // 在每个请求中设置代理
+		Body:      string(jsonData),
+		Method:    "POST",
 		Headers: map[string]string{
 			"Content-Type": "application/json",
 			"Accept":       accept,
 			"Origin":       baseURL,
 			"Referer":      baseURL + "/",
 			"Cookie":       cookie,
+			"User-Agent":   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
 		},
 	}, "POST")
 }
@@ -566,6 +633,16 @@ func makeDeleteRequest(client cycletls.CycleTLS, cookie, projectId string) (cycl
 	// 不删除环境变量中的map中的对话
 
 	for _, v := range config.ModelChatMap {
+		if v == projectId {
+			return cycletls.Response{}, nil
+		}
+	}
+	for _, v := range config.GlobalSessionManager.GetChatIDsByCookie(cookie) {
+		if v == projectId {
+			return cycletls.Response{}, nil
+		}
+	}
+	for _, v := range config.SessionImageChatMap {
 		if v == projectId {
 			return cycletls.Response{}, nil
 		}
@@ -663,6 +740,7 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 	const (
 		errNoValidCookies         = "No valid cookies available"
 		errCloudflareChallengeMsg = "Detected Cloudflare Challenge Page"
+		errServerErrMsg           = "An error occurred with the current request, please try again."
 		errServiceUnavailable     = "Genspark Service Unavailable"
 	)
 
@@ -711,6 +789,10 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 				case common.IsServiceUnavailablePage(data):
 					logger.Errorf(ctx, errServiceUnavailable)
 					c.JSON(http.StatusInternalServerError, gin.H{"error": errServiceUnavailable})
+					return false
+				case common.IsServerError(data):
+					logger.Errorf(ctx, errServerErrMsg)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": errServerErrMsg})
 					return false
 				case common.IsRateLimit(data):
 					isRateLimit = true
@@ -773,6 +855,12 @@ func processStreamData(c *gin.Context, data string, projectId *string, cookie, r
 	switch eventType {
 	case "project_start":
 		*projectId, _ = event["id"].(string)
+	case "message_field":
+		if err := handleMessageFieldDelta(c, event, responseId, model, jsonData); err != nil {
+			logger.Errorf(c.Request.Context(), "handleMessageFieldDelta err: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return false
+		}
 	case "message_field_delta":
 		if err := handleMessageFieldDelta(c, event, responseId, model, jsonData); err != nil {
 			logger.Errorf(c.Request.Context(), "handleMessageFieldDelta err: %v", err)
@@ -912,6 +1000,7 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 	const (
 		errNoValidCookies         = "No valid cookies available"
 		errCloudflareChallengeMsg = "Detected Cloudflare Challenge Page"
+		errServerErrMsg           = "An error occurred with the current request, please try again."
 		errServiceUnavailable     = "Genspark Service Unavailable"
 		errNoValidResponseContent = "No valid response content"
 	)
@@ -960,6 +1049,10 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 			case common.IsServiceUnavailablePage(line):
 				logger.Errorf(ctx, errServiceUnavailable)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": errServiceUnavailable})
+				return
+			case common.IsServerError(line):
+				logger.Errorf(ctx, errServerErrMsg)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": errServerErrMsg})
 				return
 			case strings.HasPrefix(line, "data: "):
 
@@ -1075,13 +1168,17 @@ func ImagesForOpenAI(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	cookie, err := common.RandomElement(config.GSCookies)
-	if err != nil {
-		logger.Errorf(c.Request.Context(), err.Error())
-		return
-	}
+	// 初始化cookie
+	//cookieManager := config.NewCookieManager()
+	//cookie, err := cookieManager.GetRandomCookie()
+	//
+	//if err != nil {
+	//	logger.Errorf(c.Request.Context(), "Failed to get initial cookie: %v", err)
+	//	c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+	//	return
+	//}
 
-	resp, err := ImageProcess(c, client, cookie, openAIReq)
+	resp, err := ImageProcess(c, client, openAIReq)
 	if err != nil {
 		logger.Errorf(c.Request.Context(), fmt.Sprintf("ImageProcess err  %v\n", err))
 		c.JSON(http.StatusInternalServerError, model.OpenAIErrorResponse{
@@ -1098,41 +1195,134 @@ func ImagesForOpenAI(c *gin.Context) {
 
 }
 
-func ImageProcess(c *gin.Context, client cycletls.CycleTLS, cookie string, openAIReq model.OpenAIImagesGenerationRequest) (*model.OpenAIImagesGenerationResponse, error) {
-	requestBody, err := createImageRequestBody(c, cookie, &openAIReq)
-	if err != nil {
-		return nil, err
-	}
-	jsonData, err := json.Marshal(requestBody)
-	if err != nil {
-		//c.JSON(500, gin.H{"error": "Failed to marshal request body"})
-		return nil, err
-	}
+func ImageProcess(c *gin.Context, client cycletls.CycleTLS, openAIReq model.OpenAIImagesGenerationRequest) (*model.OpenAIImagesGenerationResponse, error) {
+	const (
+		errNoValidCookies = "No valid cookies available"
+		errRateLimitMsg   = "Rate limit reached, please try again later"
+		errServerErrMsg   = "An error occurred with the current request, please try again"
+		errNoValidTaskIDs = "No valid task IDs received"
+	)
 
-	//client := cycletls.Init()
-	//defer client.Close()
+	var (
+		sessionImageChatManager *config.SessionMapManager
+		maxRetries              int
+		cookie                  string
+		chatId                  string
+	)
 
-	response, err := makeImageRequest(client, jsonData, cookie)
+	cookieManager := config.NewCookieManager()
+	sessionImageChatManager = config.NewSessionMapManager()
+	ctx := c.Request.Context()
 
-	if err != nil {
-		return nil, err
+	// Initialize session manager and get initial cookie
+	if len(config.SessionImageChatMap) == 0 {
+		logger.Warnf(ctx, "未配置环境变量 SESSION_IMAGE_CHAT_MAP, 可能会生图失败!")
+		maxRetries = len(cookieManager.Cookies)
+
+		var err error
+		cookie, err = cookieManager.GetRandomCookie()
+		if err != nil {
+			logger.Errorf(ctx, "Failed to get initial cookie: %v", err)
+			return nil, fmt.Errorf(errNoValidCookies)
+		}
 	} else {
-		// 解析响应获取task_ids
-		projectId, taskIDs := extractTaskIDs(response.Body)
-		if len(taskIDs) == 0 {
-			return nil, fmt.Errorf("no task IDs found")
+		maxRetries = sessionImageChatManager.GetSize()
+		cookie, chatId, _ = sessionImageChatManager.GetRandomKeyValue()
+	}
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Create request body
+		requestBody, err := createImageRequestBody(c, cookie, &openAIReq, chatId)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to create request body: %v", err)
+			return nil, err
 		}
 
-		// 获取所有图片URL
-		imageURLs := pollTaskStatus(c, client, taskIDs, cookie)
+		// Marshal request body
+		jsonData, err := json.Marshal(requestBody)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to marshal request body: %v", err)
+			return nil, err
+		}
 
-		// 创建响应对象
-		response := &model.OpenAIImagesGenerationResponse{
+		// Make request
+		response, err := makeImageRequest(client, jsonData, cookie)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to make image request: %v", err)
+			return nil, err
+		}
+
+		body := response.Body
+
+		// Handle different response cases
+		switch {
+		case common.IsRateLimit(body):
+			logger.Warnf(ctx, "Cookie rate limited, switching to next cookie, attempt %d/%d", attempt+1, maxRetries)
+			if sessionImageChatManager != nil {
+				cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
+				if err != nil {
+					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+					return nil, fmt.Errorf(errNoValidCookies)
+				}
+			} else {
+				//cookieManager := config.NewCookieManager()
+				cookie, err = cookieManager.GetNextCookie()
+				if err != nil {
+					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+					return nil, fmt.Errorf(errNoValidCookies)
+				}
+			}
+			continue
+		case common.IsFreeLimit(body):
+			logger.Warnf(ctx, "Cookie rate limited, switching to next cookie, attempt %d/%d", attempt+1, maxRetries)
+			if sessionImageChatManager != nil {
+				cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
+				if err != nil {
+					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+					return nil, fmt.Errorf(errNoValidCookies)
+				}
+			} else {
+				//cookieManager := config.NewCookieManager()
+				cookie, err = cookieManager.GetNextCookie()
+				if err != nil {
+					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+					return nil, fmt.Errorf(errNoValidCookies)
+				}
+			}
+			continue
+		case common.IsServerError(body):
+			logger.Errorf(ctx, errServerErrMsg)
+			return nil, fmt.Errorf(errServerErrMsg)
+		case common.IsServerOverloaded(body):
+			logger.Errorf(ctx, fmt.Sprintf("Server overloaded, please try again later.%s", "官方服务超载或环境变量 SESSION_IMAGE_CHAT_MAP 未配置"))
+			return nil, fmt.Errorf("Server overloaded, please try again later.")
+		}
+
+		// Extract task IDs
+		projectId, taskIDs := extractTaskIDs(response.Body)
+		if len(taskIDs) == 0 {
+			logger.Errorf(ctx, "Response body: %s", response.Body)
+			return nil, fmt.Errorf(errNoValidTaskIDs)
+		}
+
+		// Poll for image URLs
+		imageURLs := pollTaskStatus(c, client, taskIDs, cookie)
+		if len(imageURLs) == 0 {
+			logger.Warnf(ctx, "No image URLs received, retrying with next cookie")
+			continue
+		}
+
+		// Create response object
+		result := &model.OpenAIImagesGenerationResponse{
 			Created: time.Now().Unix(),
 			Data:    make([]*model.OpenAIImagesGenerationDataResponse, 0, len(imageURLs)),
 		}
 
-		// 遍历 imageURLs 组装数据
+		// Process image URLs
 		for _, url := range imageURLs {
 			data := &model.OpenAIImagesGenerationDataResponse{
 				URL:           url,
@@ -1142,28 +1332,33 @@ func ImageProcess(c *gin.Context, client cycletls.CycleTLS, cookie string, openA
 			if openAIReq.ResponseFormat == "b64_json" {
 				base64Str, err := getBase64ByUrl(data.URL)
 				if err != nil {
-					logger.Errorf(c.Request.Context(), fmt.Sprintf("getBase64ByUrl err  %v\n", err))
-					return nil, fmt.Errorf("getBase64ByUrl err: %v\n", err)
+					logger.Errorf(ctx, "getBase64ByUrl error: %v", err)
+					continue
 				}
 				data.B64Json = "data:image/webp;base64," + base64Str
 			}
-			response.Data = append(response.Data, data)
+
+			result.Data = append(result.Data, data)
 		}
 
-		// 删除临时会话
-		if config.AutoDelChat == 1 {
-			go func() {
-				client := cycletls.Init()
-				defer safeClose(client)
-				makeDeleteRequest(client, cookie, projectId)
-			}()
+		// Handle successful case
+		if len(result.Data) > 0 {
+			// Delete temporary session if needed
+			if config.AutoDelChat == 1 {
+				go func() {
+					client := cycletls.Init()
+					defer safeClose(client)
+					makeDeleteRequest(client, cookie, projectId)
+				}()
+			}
+			return result, nil
 		}
-
-		//c.JSON(200, response)
-		return response, nil
 	}
-}
 
+	// All retries exhausted
+	logger.Errorf(ctx, "All cookies exhausted after %d attempts", maxRetries)
+	return nil, fmt.Errorf("all cookies are temporarily unavailable")
+}
 func extractTaskIDs(responseBody string) (string, []string) {
 	var taskIDs []string
 	var projectId string
