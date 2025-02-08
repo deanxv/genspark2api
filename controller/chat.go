@@ -13,7 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
@@ -329,7 +328,7 @@ func fetchImageBytes(url string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	return ioutil.ReadAll(resp.Body)
+	return io.ReadAll(resp.Body)
 }
 
 func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, openAIReq *model.OpenAIChatCompletionRequest) (map[string]interface{}, error) {
@@ -848,6 +847,7 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 				case common.IsFreeLimit(data):
 					isRateLimit = true
 					logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
+					config.CookieLimit(cookie)
 					break SSELoop // 使用 label 跳出 SSE 循环
 				case common.IsNotLogin(data):
 					isRateLimit = true
@@ -1113,6 +1113,7 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 			case common.IsFreeLimit(line):
 				isRateLimit = true
 				logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
+				config.CookieLimit(cookie)
 				break
 			case common.IsNotLogin(line):
 				isRateLimit = true
