@@ -24,6 +24,7 @@ var AutoDelChat = env.Int("AUTO_DEL_CHAT", 0)
 var ProxyUrl = env.String("PROXY_URL", "")
 var AutoModelChatMapType = env.Int("AUTO_MODEL_CHAT_MAP_TYPE", 1)
 var YesCaptchaClientKey = env.String("YES_CAPTCHA_CLIENT_KEY", "")
+var CheatUrl = env.String("CHEAT_URL", "https://gs-cheat.aytsao.cn/genspark/create/req/body")
 
 // 路由前缀
 var RoutePrefix = env.String("ROUTE_PREFIX", "")

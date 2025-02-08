@@ -161,14 +161,16 @@ Render 可以直接部署 docker 镜像,不需要 fork 仓库：[Render](https:/
 2. `DEBUG=true`  [可选]DEBUG模式,可打印更多信息[true:打开、false:关闭]
 3. `API_SECRET=123456`  [可选]接口密钥-修改此行为请求头(Authorization)校验的值(同API-KEY)(多个请以,分隔)
 4. `GS_COOKIE=******`  cookie (多个请以,分隔)
+
 ~~5. `YES_CAPTCHA_CLIENT_KEY=******`  [可选]YesCaptcha Client Key 过谷歌验证,详细请看[使用YesCaptcha过谷歌验证](#使用YesCaptcha过谷歌验证)~~
-6. `AUTO_DEL_CHAT=0`  [可选]对话完成自动删除(默认:0)[0:关闭,1:开启]
+
+7. `AUTO_DEL_CHAT=0`  [可选]对话完成自动删除(默认:0)[0:关闭,1:开启]
 7. `REQUEST_RATE_LIMIT=60`  [可选]每分钟下的单ip请求速率限制,默认:60次/min
 8. `PROXY_URL=http://127.0.0.1:10801`  [可选]代理
 9. `AUTO_MODEL_CHAT_MAP_TYPE=1`  [可选]自动配置Model绑定Chat(默认:1)[0:关闭,1:开启]
 10. `MODEL_CHAT_MAP=claude-3-5-sonnet=a649******00fa,gpt-4o=su74******47hd`  [可选]Model绑定Chat(多个请以,分隔),详细请看[进阶配置](#解决模型自动切换导致降智问题)
 11. `SESSION_IMAGE_CHAT_MAP=aed9196b-********-4ed6e32f7e4d=0c6785e6-********-7ff6e5a2a29c,aefwer6b-********-casds22=fda234-********-sfaw123`  [可选]Session绑定Image-Chat(多个请以,分隔),详细请看[进阶配置](#生图模型配置)
-12. `ROUTE_PREFIX_=hf`  [可选]路由前缀,默认为空,添加该变量后的接口示例:`/hf/v1/chat/completions`
+12. `ROUTE_PREFIX=hf`  [可选]路由前缀,默认为空,添加该变量后的接口示例:`/hf/v1/chat/completions`
 
 ### cookie获取方式
 
