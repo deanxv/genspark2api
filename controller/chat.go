@@ -876,6 +876,7 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 					break SSELoop // 使用 label 跳出 SSE 循环
 				case common.IsFreeLimit(data):
 					isRateLimit = true
+					config.CookieLimit(cookie)
 					logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
 					break SSELoop // 使用 label 跳出 SSE 循环
 				case common.IsNotLogin(data):
@@ -1141,6 +1142,7 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 				break
 			case common.IsFreeLimit(line):
 				isRateLimit = true
+				config.CookieLimit(cookie)
 				logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
 				break
 			case common.IsNotLogin(line):
@@ -1391,6 +1393,7 @@ func ImageProcess(c *gin.Context, client cycletls.CycleTLS, openAIReq model.Open
 			}
 			continue
 		case common.IsFreeLimit(body):
+			config.CookieLimit(cookie)
 			logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
 			if sessionImageChatManager != nil {
 				cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
