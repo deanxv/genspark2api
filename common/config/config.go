@@ -52,13 +52,18 @@ var (
 	RequestRateLimitDuration int64 = 1 * 60
 )
 
+var (
+	FreeLimitDisableCookieNum      = env.Int("FREE_LIMIT_DISABLE_COOKIE_NUM", 0)
+	FreeLimitDisableCookieDuration = time.Duration(FreeLimitDisableCookieNum) * time.Second
+)
+
 type CookieManager struct {
 	Cookies      []string
 	currentIndex int
 	mu           sync.Mutex
 }
 
-func NewCookieManager() *CookieManager {
+func NewCookieManager() (cm *CookieManager) {
 	cookies := strings.Split(os.Getenv("GS_COOKIE"), ",")
 	// 过滤空字符串
 	var validCookies []string
@@ -74,10 +79,12 @@ func NewCookieManager() *CookieManager {
 		}
 	}
 
-	return &CookieManager{
+	cm = &CookieManager{
 		Cookies:      validCookies,
 		currentIndex: 0,
 	}
+	cm.GetNoLimitCookie()
+	return cm
 }
 
 func (cm *CookieManager) RemoveCookie(cookieToRemove string) error {
