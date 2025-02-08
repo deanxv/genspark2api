@@ -10,6 +10,7 @@ import (
 	"genspark2api/common/config"
 	logger "genspark2api/common/loggger"
 	"genspark2api/model"
+	"genspark2api/token"
 	"github.com/deanxv/CycleTLS/cycletls"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -395,9 +396,11 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 			"writingContent":         nil,
 			"request_web_knowledge":  requestWebKnowledge,
 		},
-		//"g_recaptcha_token": gRecaptchaToken,
+		"g_recaptcha_token": token.GetCopilotRecaptchaToken(),
 	}
-
+	if requestBody["g_recaptcha_token"] != "" {
+		return requestBody, nil
+	}
 	logger.Debug(c.Request.Context(), fmt.Sprintf("RequestBody: %v", requestBody))
 
 	if strings.TrimSpace(config.CheatUrl) == "" ||
