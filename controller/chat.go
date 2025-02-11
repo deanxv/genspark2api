@@ -363,27 +363,6 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 		models = common.MixtureModelList
 	}
 
-	//gRecaptchaToken := ""
-	//if config.YesCaptchaClientKey != "" {
-	//	// 创建上下文，设置超时
-	//	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	//	defer cancel()
-	//	// 准备请求参数
-	//	req := yescaptcha.RecaptchaV3Request{
-	//		WebsiteURL: "https://www.genspark.ai/",
-	//		WebsiteKey: "6Leq7KYqAAAAAGdd1NaUBJF9dHTPAKP7DcnaRc66",
-	//		PageAction: "copilot",
-	//	}
-	//
-	//	// 解决验证码
-	//	response, err := config.YescaptchaClient.SolveRecaptchaV3(ctx, req)
-	//	if err != nil {
-	//		return map[string]interface{}{}, err
-	//	}
-	//
-	//	gRecaptchaToken = response
-	//}
-
 	// 创建请求体
 	requestBody := map[string]interface{}{
 		"type":                 chatType,
@@ -396,7 +375,6 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 			"writingContent":         nil,
 			"request_web_knowledge":  requestWebKnowledge,
 		},
-		//"g_recaptcha_token": gRecaptchaToken,
 	}
 
 	logger.Debug(c.Request.Context(), fmt.Sprintf("RequestBody: %v", requestBody))
@@ -406,7 +384,6 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 			!strings.HasPrefix(config.CheatUrl, "https://")) {
 		return requestBody, nil
 	} else {
-		// 发送请求到本地测试接口
 		jsonData, err := json.Marshal(requestBody)
 		if err != nil {
 			return nil, fmt.Errorf("marshal request body error: %v", err)
@@ -430,26 +407,6 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 }
 
 func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.OpenAIImagesGenerationRequest, chatId string) (map[string]interface{}, error) {
-	//gRecaptchaToken := ""
-	//if config.YesCaptchaClientKey != "" {
-	//	// 创建上下文，设置超时
-	//	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	//	defer cancel()
-	//	// 准备请求参数
-	//	req := yescaptcha.RecaptchaV3Request{
-	//		WebsiteURL: "https://www.genspark.ai/",
-	//		WebsiteKey: "6Leq7KYqAAAAAGdd1NaUBJF9dHTPAKP7DcnaRc66",
-	//		PageAction: "copilot",
-	//	}
-	//
-	//	// 解决验证码
-	//	response, err := config.YescaptchaClient.SolveRecaptchaV3(ctx, req)
-	//	if err != nil {
-	//		return map[string]interface{}{}, err
-	//	}
-	//
-	//	gRecaptchaToken = response
-	//}
 
 	if openAIReq.Model == "dall-e-3" {
 		openAIReq.Model = "dalle-3"
@@ -534,7 +491,7 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 	}
 
 	// 创建请求体
-	return map[string]interface{}{
+	requestBody := map[string]interface{}{
 		"type": "COPILOT_MOA_IMAGE",
 		//"current_query_string": "type=COPILOT_MOA_IMAGE",
 		"current_query_string": currentQueryString,
@@ -547,8 +504,35 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 			"imageModelMap":  map[string]interface{}{},
 			"writingContent": nil,
 		},
-		//"g_recaptcha_token": gRecaptchaToken,
-	}, nil
+	}
+
+	logger.Debug(c.Request.Context(), fmt.Sprintf("RequestBody: %v", requestBody))
+
+	if strings.TrimSpace(config.CheatUrl) == "" ||
+		(!strings.HasPrefix(config.CheatUrl, "http://") &&
+			!strings.HasPrefix(config.CheatUrl, "https://")) {
+		return requestBody, nil
+	} else {
+		jsonData, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request body error: %v", err)
+		}
+
+		resp, err := http.Post(config.CheatUrl, "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, fmt.Errorf("send request to test api error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// 读取响应
+		var response map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			return nil, fmt.Errorf("decode response error: %v", err)
+		}
+		logger.Debugf(c.Request.Context(), fmt.Sprintf("Cheat success!"))
+		return response, nil
+	}
+
 }
 
 // createStreamResponse 创建流式响应
@@ -1087,7 +1071,6 @@ func makeStreamRequest(c *gin.Context, client cycletls.CycleTLS, jsonData []byte
 //	}
 func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string, cookieManager *config.CookieManager, requestBody map[string]interface{}, modelName string, searchModel bool) {
 	const (
-		errNoValidCookies         = "No valid cookies available"
 		errCloudflareChallengeMsg = "Detected Cloudflare Challenge Page"
 		errCloudflareBlock        = "CloudFlare: Sorry, you have been blocked"
 		errServerErrMsg           = "An error occurred with the current request, please try again."
@@ -1321,31 +1304,31 @@ func ImageProcess(c *gin.Context, client cycletls.CycleTLS, openAIReq model.Open
 	)
 
 	var (
-		sessionImageChatManager *config.SessionMapManager
-		maxRetries              int
-		cookie                  string
-		chatId                  string
+		//sessionImageChatManager *config.SessionMapManager
+		maxRetries int
+		cookie     string
+		chatId     string
 	)
 
 	cookieManager := config.NewCookieManager()
-	sessionImageChatManager = config.NewSessionMapManager()
+	//sessionImageChatManager = config.NewSessionMapManager()
 	ctx := c.Request.Context()
 
 	// Initialize session manager and get initial cookie
-	if len(config.SessionImageChatMap) == 0 {
-		logger.Warnf(ctx, "未配置环境变量 SESSION_IMAGE_CHAT_MAP, 可能会生图失败!")
-		maxRetries = len(cookieManager.Cookies)
+	//if len(config.SessionImageChatMap) == 0 {
+	//logger.Warnf(ctx, "未配置环境变量 SESSION_IMAGE_CHAT_MAP, 可能会生图失败!")
+	maxRetries = len(cookieManager.Cookies)
 
-		var err error
-		cookie, err = cookieManager.GetRandomCookie()
-		if err != nil {
-			logger.Errorf(ctx, "Failed to get initial cookie: %v", err)
-			return nil, fmt.Errorf(errNoValidCookies)
-		}
-	} else {
-		maxRetries = sessionImageChatManager.GetSize()
-		cookie, chatId, _ = sessionImageChatManager.GetRandomKeyValue()
+	var err error
+	cookie, err = cookieManager.GetRandomCookie()
+	if err != nil {
+		logger.Errorf(ctx, "Failed to get initial cookie: %v", err)
+		return nil, fmt.Errorf(errNoValidCookies)
 	}
+	//} else {
+	//	maxRetries = sessionImageChatManager.GetSize()
+	//	cookie, chatId, _ = sessionImageChatManager.GetRandomKeyValue()
+	//}
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Create request body
@@ -1375,65 +1358,65 @@ func ImageProcess(c *gin.Context, client cycletls.CycleTLS, openAIReq model.Open
 		switch {
 		case common.IsRateLimit(body):
 			logger.Warnf(ctx, "Cookie rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
-			if sessionImageChatManager != nil {
-				cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
-				if err != nil {
-					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
-					return nil, fmt.Errorf(errNoValidCookies)
-				}
-			} else {
-				//cookieManager := config.NewCookieManager()
-				cookie, err = cookieManager.GetNextCookie()
-				if err != nil {
-					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
-					return nil, fmt.Errorf(errNoValidCookies)
-				}
+			//if sessionImageChatManager != nil {
+			//	cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
+			//	if err != nil {
+			//		logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+			//		c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+			//		return nil, fmt.Errorf(errNoValidCookies)
+			//	}
+			//} else {
+			//cookieManager := config.NewCookieManager()
+			cookie, err = cookieManager.GetNextCookie()
+			if err != nil {
+				logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+				return nil, fmt.Errorf(errNoValidCookies)
+				//}
 			}
 			continue
 		case common.IsFreeLimit(body):
 			config.CookieLimit(cookie)
 			logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
-			if sessionImageChatManager != nil {
-				cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
-				if err != nil {
-					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
-					return nil, fmt.Errorf(errNoValidCookies)
-				}
-			} else {
-				//cookieManager := config.NewCookieManager()
-				cookie, err = cookieManager.GetNextCookie()
-				if err != nil {
-					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
-					return nil, fmt.Errorf(errNoValidCookies)
-				}
+			//if sessionImageChatManager != nil {
+			//	cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
+			//	if err != nil {
+			//		logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+			//		c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+			//		return nil, fmt.Errorf(errNoValidCookies)
+			//	}
+			//} else {
+			//cookieManager := config.NewCookieManager()
+			cookie, err = cookieManager.GetNextCookie()
+			if err != nil {
+				logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+				return nil, fmt.Errorf(errNoValidCookies)
+				//}
 			}
 			continue
 		case common.IsNotLogin(body):
 			logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
-			if sessionImageChatManager != nil {
-				//sessionImageChatManager.RemoveKey(cookie)
-				cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
-				if err != nil {
-					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
-					return nil, fmt.Errorf(errNoValidCookies)
-				}
-			} else {
-				//cookieManager := config.NewCookieManager()
-				//err := cookieManager.RemoveCookie(cookie)
-				//if err != nil {
-				//	logger.Errorf(ctx, "Failed to remove cookie: %v", err)
+			//if sessionImageChatManager != nil {
+			//	//sessionImageChatManager.RemoveKey(cookie)
+			//	cookie, chatId, err = sessionImageChatManager.GetNextKeyValue()
+			//	if err != nil {
+			//		logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+			//		c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+			//		return nil, fmt.Errorf(errNoValidCookies)
+			//	}
+			//} else {
+			//cookieManager := config.NewCookieManager()
+			//err := cookieManager.RemoveCookie(cookie)
+			//if err != nil {
+			//	logger.Errorf(ctx, "Failed to remove cookie: %v", err)
+			//}
+			cookie, err = cookieManager.GetNextCookie()
+			if err != nil {
+				logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
+				return nil, fmt.Errorf(errNoValidCookies)
 				//}
-				cookie, err = cookieManager.GetNextCookie()
-				if err != nil {
-					logger.Errorf(ctx, "No more valid cookies available after attempt %d", attempt+1)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
-					return nil, fmt.Errorf(errNoValidCookies)
-				}
 
 			}
 			continue

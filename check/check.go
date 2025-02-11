@@ -44,25 +44,25 @@ func CheckEnvVariable() {
 		}
 	}
 
-	if config.SessionImageChatMapStr != "" {
-		pattern := `^([a-zA-Z0-9\-\/]+=([a-zA-Z0-9\-\.]+))(,[a-zA-Z0-9\-\/]+=([a-zA-Z0-9\-\.]+))*`
-		match, _ := regexp.MatchString(pattern, config.SessionImageChatMapStr)
-		if !match {
-			logger.FatalLog("环境变量 SESSION_IMAGE_CHAT_MAP 设置有误")
-		} else {
-			sessionImageChatMap := make(map[string]string)
-			pairs := strings.Split(config.SessionImageChatMapStr, ",")
-
-			for _, pair := range pairs {
-				kv := strings.Split(pair, "=")
-				sessionImageChatMap["session_id="+kv[0]] = kv[1]
-			}
-
-			config.SessionImageChatMap = sessionImageChatMap
-		}
-	} else {
-		logger.SysLog("环境变量 SESSION_IMAGE_CHAT_MAP 未设置，生图可能会异常")
-	}
+	//if config.SessionImageChatMapStr != "" {
+	//	pattern := `^([a-zA-Z0-9\-\/]+=([a-zA-Z0-9\-\.]+))(,[a-zA-Z0-9\-\/]+=([a-zA-Z0-9\-\.]+))*`
+	//	match, _ := regexp.MatchString(pattern, config.SessionImageChatMapStr)
+	//	if !match {
+	//		logger.FatalLog("环境变量 SESSION_IMAGE_CHAT_MAP 设置有误")
+	//	} else {
+	//		sessionImageChatMap := make(map[string]string)
+	//		pairs := strings.Split(config.SessionImageChatMapStr, ",")
+	//
+	//		for _, pair := range pairs {
+	//			kv := strings.Split(pair, "=")
+	//			sessionImageChatMap["session_id="+kv[0]] = kv[1]
+	//		}
+	//
+	//		config.SessionImageChatMap = sessionImageChatMap
+	//	}
+	//} else {
+	//	logger.SysLog("环境变量 SESSION_IMAGE_CHAT_MAP 未设置，生图可能会异常")
+	//}
 
 	logger.SysLog("environment variable check passed.")
 }
