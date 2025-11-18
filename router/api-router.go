@@ -10,14 +10,21 @@ import (
 )
 
 func SetApiRouter(router *gin.Engine) {
-	router.Use(middleware.CORS())
-	//router.Use(gzip.Gzip(gzip.DefaultCompression))
+	router.Use(middleware.SecurityHeaders())
+	router.Use(middleware.CORSMiddleware())
+	router.Use(middleware.SecurityLogger())
 	router.Use(middleware.IPBlacklistMiddleware())
 	router.Use(middleware.RequestRateLimit())
+	router.Use(middleware.RequestSizeLimiter(10 * 1024 * 1024)) // 10MB limit
+	router.Use(middleware.RecoveryMiddleware())
+	router.Use(middleware.ErrorMiddleware())
+	router.Use(middleware.ValidationMiddleware())
+	router.Use(middleware.SanitizeInput())
 	router.Use(middleware.MetricsMiddleware())
 	router.Use(middleware.RequestLoggingMiddleware())
 
-	router.GET("/")
+	// Add API key validation for protected routes
+	router.Use(middleware.APIKeyValidator())
 	router.GET("/health", controller.HealthCheck)
 	router.GET("/metrics", controller.MetricsHandler)
 	router.POST("/metrics/reset", controller.ResetMetricsHandler)
