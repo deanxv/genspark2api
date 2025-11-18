@@ -14,9 +14,13 @@ func SetApiRouter(router *gin.Engine) {
 	//router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(middleware.IPBlacklistMiddleware())
 	router.Use(middleware.RequestRateLimit())
+	router.Use(middleware.MetricsMiddleware())
+	router.Use(middleware.RequestLoggingMiddleware())
 
 	router.GET("/")
 	router.GET("/health", controller.HealthCheck)
+	router.GET("/metrics", controller.MetricsHandler)
+	router.POST("/metrics/reset", controller.ResetMetricsHandler)
 
 	//router.GET("/api/init/model/chat/map", controller.InitModelChatMap)
 	//https://api.openai.com/v1/images/generations
