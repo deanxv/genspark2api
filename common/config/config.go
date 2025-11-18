@@ -14,6 +14,14 @@ import (
 var ApiSecret = os.Getenv("API_SECRET")
 var ApiSecrets = strings.Split(os.Getenv("API_SECRET"), ",")
 
+// AdminKey for admin access to configuration management
+var AdminKey = os.Getenv("ADMIN_KEY")
+
+// Redis configuration for distributed rate limiting and caching
+var RedisAddr = env.String("REDIS_ADDR", "localhost:6379")
+var RedisPassword = env.String("REDIS_PASSWORD", "")
+var RedisDB = env.Int("REDIS_DB", 0)
+
 var GSCookie = os.Getenv("GS_COOKIE")
 
 //var GSCookies = strings.Split(os.Getenv("GS_COOKIE"), ",")

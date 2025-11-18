@@ -32,6 +32,12 @@ func main() {
 
 	config.GlobalSessionManager = config.NewSessionManager()
 
+	// Initialize Redis manager for advanced rate limiting
+	if err := controller.InitializeRedisManager(); err != nil {
+		logger.SysLogf("Redis manager initialization failed: %v", err)
+		logger.SysLog("Falling back to memory-based rate limiting")
+	}
+
 	// 定时任务 每天9点整重载GS_COOKIES
 	//go job.LoadCookieTask()
 

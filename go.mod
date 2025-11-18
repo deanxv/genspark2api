@@ -8,6 +8,7 @@ require (
 	github.com/deanxv/CycleTLS/cycletls v0.0.0-20250208071223-7956a8a6a221
 	github.com/gin-contrib/cors v1.7.3
 	github.com/gin-gonic/gin v1.10.0
+	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
 	github.com/json-iterator/go v1.1.12
 	github.com/pkoukk/tiktoken-go v0.1.7

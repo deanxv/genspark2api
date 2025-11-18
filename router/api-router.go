@@ -14,7 +14,7 @@ func SetApiRouter(router *gin.Engine) {
 	router.Use(middleware.CORSMiddleware())
 	router.Use(middleware.SecurityLogger())
 	router.Use(middleware.IPBlacklistMiddleware())
-	router.Use(middleware.RequestRateLimit())
+	router.Use(middleware.AdvancedRateLimitMiddleware()) // Updated to use Redis rate limiting
 	router.Use(middleware.RequestSizeLimiter(10 * 1024 * 1024)) // 10MB limit
 	router.Use(middleware.RecoveryMiddleware())
 	router.Use(middleware.ErrorMiddleware())
@@ -28,6 +28,20 @@ func SetApiRouter(router *gin.Engine) {
 	router.GET("/health", controller.HealthCheck)
 	router.GET("/metrics", controller.MetricsHandler)
 	router.POST("/metrics/reset", controller.ResetMetricsHandler)
+
+	// Redis and Rate Limit Management (Admin only)
+	router.GET("/admin/redis/status", controller.RedisStatusHandler)
+	router.GET("/admin/rate-limit/stats", controller.RateLimitStatsHandler)
+	router.POST("/admin/rate-limit/clear", controller.ClearRateLimitHandler)
+	router.PUT("/admin/rate-limit/config", controller.ConfigureRateLimitHandler)
+
+	// Configuration Management Routes (Admin only)
+	adminRouter := router.Group("/admin")
+	adminRouter.Use(middleware.AdminAuth())
+	adminRouter.GET("/config", controller.GetCurrentConfig)
+	adminRouter.PUT("/config", controller.UpdateConfig)
+	adminRouter.GET("/config/history", controller.GetConfigHistory)
+	adminRouter.POST("/config/reset", controller.ResetConfig)
 
 	//router.GET("/api/init/model/chat/map", controller.InitModelChatMap)
 	//https://api.openai.com/v1/images/generations
