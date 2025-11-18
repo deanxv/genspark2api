@@ -16,6 +16,7 @@ func SetApiRouter(router *gin.Engine) {
 	router.Use(middleware.RequestRateLimit())
 
 	router.GET("/")
+	router.GET("/health", controller.HealthCheck)
 
 	//router.GET("/api/init/model/chat/map", controller.InitModelChatMap)
 	//https://api.openai.com/v1/images/generations
