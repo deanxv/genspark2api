@@ -9,9 +9,10 @@ import (
 	"genspark2api/middleware"
 	"genspark2api/router"
 	"genspark2api/yescaptcha"
-	"github.com/gin-gonic/gin"
 	"os"
 	"strconv"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
@@ -31,6 +32,11 @@ func main() {
 	config.YescaptchaClient = yescaptcha.NewClient(config.YesCaptchaClientKey, nil)
 
 	config.GlobalSessionManager = config.NewSessionManager()
+
+	// Log configuration summary (without secrets)
+	for _, line := range config.GetConfigSummary() {
+		logger.SysLog(line)
+	}
 
 	// 定时任务 每天9点整重载GS_COOKIES
 	//go job.LoadCookieTask()

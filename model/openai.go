@@ -116,8 +116,9 @@ type OpenAIChoice struct {
 }
 
 type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type OpenAIUsage struct {
@@ -127,8 +128,9 @@ type OpenAIUsage struct {
 }
 
 type OpenAIDelta struct {
-	Content string `json:"content"`
-	Role    string `json:"role"`
+	Content          string `json:"content,omitempty"`
+	Role             string `json:"role,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type OpenAIImagesGenerationRequest struct {

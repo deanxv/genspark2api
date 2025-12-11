@@ -420,3 +420,98 @@ func (sm *SessionMapManager) GetSize() int {
 	defer sm.mu.Unlock()
 	return len(sm.keys)
 }
+
+// GetConfigSummary возвращает строку с конфигурацией для логирования (без секретов)
+func GetConfigSummary() []string {
+	var lines []string
+	lines = append(lines, "========== Configuration Summary ==========")
+
+	// Основные настройки
+	if AutoDelChat == 1 {
+		lines = append(lines, "AUTO_DEL_CHAT: enabled (1)")
+	} else {
+		lines = append(lines, "AUTO_DEL_CHAT: disabled (0)")
+	}
+
+	if AutoModelChatMapType == 1 {
+		lines = append(lines, "AUTO_MODEL_CHAT_MAP_TYPE: save sessions (1)")
+	} else {
+		lines = append(lines, "AUTO_MODEL_CHAT_MAP_TYPE: delete sessions (0)")
+	}
+
+	if ReasoningHide == 1 {
+		lines = append(lines, "REASONING_HIDE: hide reasoning (1)")
+	} else {
+		lines = append(lines, "REASONING_HIDE: show reasoning (0)")
+	}
+
+	if DebugEnabled {
+		lines = append(lines, "DEBUG: enabled")
+	} else {
+		lines = append(lines, "DEBUG: disabled")
+	}
+
+	// Proxy
+	if ProxyUrl != "" {
+		lines = append(lines, "PROXY_URL: configured")
+	} else {
+		lines = append(lines, "PROXY_URL: not set")
+	}
+
+	// Recaptcha
+	if RecaptchaProxyUrl != "" {
+		lines = append(lines, "RECAPTCHA_PROXY_URL: configured")
+	} else {
+		lines = append(lines, "RECAPTCHA_PROXY_URL: not set")
+	}
+
+	// Route prefix
+	if RoutePrefix != "" {
+		lines = append(lines, "ROUTE_PREFIX: "+RoutePrefix)
+	} else {
+		lines = append(lines, "ROUTE_PREFIX: not set")
+	}
+
+	// Cookies count
+	cookiesCount := len(GSCookies)
+	if cookiesCount == 1 {
+		lines = append(lines, "GS_COOKIES_COUNT: 1 cookie")
+	} else {
+		lines = append(lines, "GS_COOKIES_COUNT: multiple cookies configured")
+	}
+
+	// Model chat map
+	if len(ModelChatMap) > 0 {
+		lines = append(lines, "MODEL_CHAT_MAP: configured")
+	} else {
+		lines = append(lines, "MODEL_CHAT_MAP: not set")
+	}
+
+	// Session image chat map
+	if len(SessionImageChatMap) > 0 {
+		lines = append(lines, "SESSION_IMAGE_CHAT_MAP: configured")
+	} else {
+		lines = append(lines, "SESSION_IMAGE_CHAT_MAP: not set")
+	}
+
+	// Pre messages
+	if PRE_MESSAGES_JSON != "" {
+		lines = append(lines, "PRE_MESSAGES_JSON: configured")
+	} else {
+		lines = append(lines, "PRE_MESSAGES_JSON: not set")
+	}
+
+	// YesCaptcha
+	if YesCaptchaClientKey != "" {
+		lines = append(lines, "YES_CAPTCHA_CLIENT_KEY: configured")
+	} else {
+		lines = append(lines, "YES_CAPTCHA_CLIENT_KEY: not set")
+	}
+
+	// Timezone
+	tz, _ := time.Now().Zone()
+	lines = append(lines, "TIMEZONE: "+tz)
+
+	lines = append(lines, "=============================================")
+	return lines
+}

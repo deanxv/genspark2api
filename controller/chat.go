@@ -10,14 +10,15 @@ import (
 	"genspark2api/common/config"
 	logger "genspark2api/common/loggger"
 	"genspark2api/model"
-	"github.com/deanxv/CycleTLS/cycletls"
-	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/deanxv/CycleTLS/cycletls"
+	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 )
 
 const (
@@ -602,8 +603,8 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 	// 需要显示思考过程时需要额外处理的字段
 	if config.ReasoningHide != 1 {
 		baseAllowed = baseAllowed ||
-			fieldName == "session_state.answerthink_is_started" ||
 			fieldName == "session_state.answerthink" ||
+			fieldName == "session_state.answerthink_is_started" ||
 			fieldName == "session_state.answerthink_is_finished"
 	}
 
@@ -620,34 +621,37 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 		delta, _ = event["delta"].(string)
 	}
 
-	// 创建基础响应
-	createResponse := func(content string) model.OpenAIChatCompletionResponse {
-		return createStreamResponse(
-			responseId,
-			modelName,
-			jsonData,
-			model.OpenAIDelta{Content: content, Role: "assistant"},
-			nil,
-		)
-	}
-
-	// 发送基础事件
-	var err error
-	if err = sendSSEvent(c, createResponse(delta)); err != nil {
-		return err
-	}
-
-	// 处理思考过程标记
+	// 处理思考过程 - 使用 reasoning_content 字段 (OpenAI API 格式)
 	if config.ReasoningHide != 1 {
 		switch fieldName {
 		case "session_state.answerthink_is_started":
-			err = sendSSEvent(c, createResponse("<think>\n"))
+			// 发送空的reasoning_content开始标记，客户端会知道reasoning开始了
+			return nil
+		case "session_state.answerthink":
+			// 发送reasoning内容到reasoning_content字段
+			streamResp := createStreamResponse(
+				responseId,
+				modelName,
+				jsonData,
+				model.OpenAIDelta{ReasoningContent: delta, Role: "assistant"},
+				nil,
+			)
+			return sendSSEvent(c, streamResp)
 		case "session_state.answerthink_is_finished":
-			err = sendSSEvent(c, createResponse("\n</think>"))
+			// 发送空的标记表示reasoning结束
+			return nil
 		}
 	}
 
-	return err
+	// 发送普通content
+	streamResp := createStreamResponse(
+		responseId,
+		modelName,
+		jsonData,
+		model.OpenAIDelta{Content: delta, Role: "assistant"},
+		nil,
+	)
+	return sendSSEvent(c, streamResp)
 }
 
 type Content struct {
@@ -751,7 +755,7 @@ func makeImageRequest(client cycletls.CycleTLS, jsonData []byte, cookie string) 
 
 func makeDeleteRequest(client cycletls.CycleTLS, cookie, projectId string) (cycletls.Response, error) {
 
-	// 不删除环境变量中的map中的对话
+	// 不删除环境变量中的map中的对话 (Don't delete chats from configured maps)
 
 	for _, v := range config.ModelChatMap {
 		if v == projectId {
@@ -773,7 +777,7 @@ func makeDeleteRequest(client cycletls.CycleTLS, cookie, projectId string) (cycl
 
 	return client.Do(fmt.Sprintf(deleteEndpoint, projectId), cycletls.Options{
 		Timeout: 10 * 60 * 60,
-		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
+		Proxy:   config.ProxyUrl,
 		Method:  "GET",
 		Headers: map[string]string{
 			"Content-Type": "application/json",
@@ -1253,10 +1257,11 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 
 		scanner := bufio.NewScanner(strings.NewReader(response.Body))
 		var content string
-		var answerThink string
+		var reasoningContent string
 		var firstLine string
 		var projectId string
 		isRateLimit := false
+		_ = errNoValidResponseContent // Suppress unused variable warning
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -1286,13 +1291,10 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 				isRateLimit = true
 				logger.Warnf(ctx, "Cookie free rate limited, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
 				config.AddRateLimitCookie(cookie, time.Now().Add(24*60*60*time.Second))
-				// 删除cookie
-				//config.RemoveCookie(cookie)
 				break
 			case common.IsNotLogin(line):
 				isRateLimit = true
 				logger.Warnf(ctx, "Cookie Not Login, switching to next cookie, attempt %d/%d, COOKIE:%s", attempt+1, maxRetries, cookie)
-				// 删除cookie
 				config.RemoveCookie(cookie)
 				break
 			case common.IsServiceUnavailablePage(line):
@@ -1304,46 +1306,48 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 				c.JSON(http.StatusInternalServerError, gin.H{"error": errServerErrMsg})
 				return
 			case strings.HasPrefix(line, "data: "):
-
 				data := strings.TrimPrefix(line, "data: ")
 				var parsedResponse struct {
-					Type      string `json:"type"`
-					FieldName string `json:"field_name"`
-					Content   string `json:"content"`
-					Id        string `json:"id"`
-					Delta     string `json:"delta"`
+					Type       string `json:"type"`
+					FieldName  string `json:"field_name"`
+					FieldValue string `json:"field_value"`
+					Content    string `json:"content"`
+					Id         string `json:"id"`
+					Delta      string `json:"delta"`
 				}
 				if err := json.Unmarshal([]byte(data), &parsedResponse); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
+					// Игнорируем ошибки парсинга для некоторых событий (field_value может быть объектом)
+					continue
 				}
 				if parsedResponse.Type == "project_start" {
 					projectId = parsedResponse.Id
 				}
-				if parsedResponse.Type == "message_field" {
-					// 提取思考过程
+				if parsedResponse.Type == "message_field_delta" {
+					// Собираем контент из session_state.answer (для thinking моделей)
+					if parsedResponse.FieldName == "session_state.answer" {
+						content = content + parsedResponse.Delta
+					}
+					// Собираем контент из streaming_detail_answer
+					if strings.Contains(parsedResponse.FieldName, "session_state.streaming_detail_answer") {
+						content = content + parsedResponse.Delta
+					}
+					// Собираем reasoning/thinking контент
 					if config.ReasoningHide != 1 {
-						if parsedResponse.FieldName == "session_state.answerthink_is_started" {
-							answerThink = "<think>\n"
-						}
-						if parsedResponse.FieldName == "session_state.answerthink_is_finished" {
-							answerThink = answerThink + "\n</think>"
+						if parsedResponse.FieldName == "session_state.answerthink" {
+							reasoningContent = reasoningContent + parsedResponse.Delta
 						}
 					}
 				}
-				if parsedResponse.Type == "message_field_delta" {
-					// 提取思考过程
-					if config.ReasoningHide != 1 {
-						if parsedResponse.FieldName == "session_state.answerthink" {
-							answerThink = answerThink + parsedResponse.Delta
-						}
+				// Для моделей типа o1, o3-mini-high - field_value содержит весь ответ
+				if parsedResponse.Type == "message_field" {
+					if (modelName == "o1" || modelName == "o3-mini-high") && parsedResponse.FieldName == "session_state.answer" {
+						content = parsedResponse.FieldValue
 					}
 				}
 				if parsedResponse.Type == "message_result" {
-					// 删除临时会话
+					// Удаление/сохранение сессии
 					go func() {
 						if config.AutoModelChatMapType == 1 {
-							// 保存映射
 							config.GlobalSessionManager.AddSession(cookie, modelName, projectId)
 						} else {
 							if config.AutoDelChat == 1 {
@@ -1353,17 +1357,17 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 							}
 						}
 					}()
-					if modelName == "o1" && searchModel {
-						// 解析内层的 JSON
-						var content Content
-						if err := json.Unmarshal([]byte(parsedResponse.Content), &content); err != nil {
-							logger.Errorf(ctx, "Failed to unmarshal response content: %v err %s", parsedResponse.Content, err.Error())
-							c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to unmarshal response content"})
-							return
+					// Если content пустой, попробуем взять из message_result
+					if content == "" {
+						if modelName == "o1" && searchModel {
+							var contentObj Content
+							if err := json.Unmarshal([]byte(parsedResponse.Content), &contentObj); err == nil {
+								content = contentObj.DetailAnswer
+							}
+						} else {
+							content = strings.TrimSpace(parsedResponse.Content)
 						}
-						parsedResponse.Content = content.DetailAnswer
 					}
-					content = strings.TrimSpace(answerThink + parsedResponse.Content)
 					break
 				}
 			}
@@ -1385,8 +1389,9 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 					Model:   modelName,
 					Choices: []model.OpenAIChoice{{
 						Message: model.OpenAIMessage{
-							Role:    "assistant",
-							Content: content,
+							Role:             "assistant",
+							Content:          content,
+							ReasoningContent: reasoningContent,
 						},
 						FinishReason: &finishReason,
 					}},
