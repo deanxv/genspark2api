@@ -10,6 +10,7 @@ import (
 	"genspark2api/common/config"
 	logger "genspark2api/common/loggger"
 	"genspark2api/model"
+	"genspark2api/tooluse"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -176,6 +177,13 @@ func ChatForOpenAI(c *gin.Context) {
 	var isSearchModel bool
 	if strings.HasSuffix(openAIReq.Model, "-search") {
 		isSearchModel = true
+	}
+
+	// Check if tools are provided and handle tool-use mode
+	hasTools := len(openAIReq.Tools) > 0
+	if hasTools {
+		handleToolUseRequest(c, client, cookie, cookieManager, &openAIReq, isSearchModel)
+		return
 	}
 
 	requestBody, err := createRequestBody(c, client, cookie, &openAIReq)
@@ -359,7 +367,10 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 	} else if chatId, ok := config.GlobalSessionManager.GetChatID(cookie, openAIReq.Model); ok {
 		currentQueryString = fmt.Sprintf("id=%s&type=%s", chatId, chatType)
 	} else {
-		openAIReq.FilterUserMessage()
+		// Don't filter messages for tool-use requests - we need full history
+		if len(openAIReq.Tools) == 0 {
+			openAIReq.FilterUserMessage()
+		}
 	}
 	requestWebKnowledge := false
 	models := []string{openAIReq.Model}
@@ -386,7 +397,8 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 		},
 	}
 
-	logger.Debug(c.Request.Context(), fmt.Sprintf("RequestBody: %v", requestBody))
+	// Log request body if DEBUG_LOG_BODY is enabled
+	logger.LogRequestBody(c.Request.Context(), requestBody)
 
 	return requestBody, nil
 }
@@ -1820,6 +1832,424 @@ func getBase64ByUrl(url string) (string, error) {
 	// Encode the image data to Base64
 	base64Str := base64.StdEncoding.EncodeToString(imgData)
 	return base64Str, nil
+}
+
+// handleToolUseRequest handles requests with tools - injects meta-prompt and parses tool calls from response
+func handleToolUseRequest(c *gin.Context, client cycletls.CycleTLS, cookie string, cookieManager *config.CookieManager, openAIReq *model.OpenAIChatCompletionRequest, isSearchModel bool) {
+	ctx := c.Request.Context()
+
+	// Log request start with tool info
+	logger.LogRequestStart(ctx, openAIReq.Model, true)
+	logger.LogToolEvent(ctx, "TOOL_PROMPT_PREPARING", map[string]interface{}{
+		"tools_count": len(openAIReq.Tools),
+	})
+
+	// Add tool system prompt to messages
+	openAIReq.Messages = tooluse.PrependToolSystemMessage(openAIReq.Messages, openAIReq.Tools)
+	logger.LogToolEvent(ctx, "TOOL_PROMPT_INJECTED", map[string]interface{}{
+		"messages_count": len(openAIReq.Messages),
+	})
+
+	// Create request body (without tools - genspark doesn't support them)
+	requestBody, err := createRequestBody(c, client, cookie, openAIReq)
+	if err != nil {
+		logger.StructuredError(ctx, logger.SubTool, fmt.Sprintf("Failed to create request body: %v", err))
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	// For tool-use, we always need to get the full response first to parse it
+	// So we handle it as non-stream internally, then convert to stream if needed
+	if openAIReq.Stream {
+		handleToolUseStreamRequest(c, client, cookie, cookieManager, requestBody, openAIReq, isSearchModel)
+	} else {
+		handleToolUseNonStreamRequest(c, client, cookie, cookieManager, requestBody, openAIReq, isSearchModel)
+	}
+
+	logger.StructuredDebug(ctx, logger.SubTool, "REQ_COMPLETE", "Tool use request completed")
+}
+
+// handleToolUseNonStreamRequest handles non-streaming tool use requests
+func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string, cookieManager *config.CookieManager, requestBody map[string]interface{}, openAIReq *model.OpenAIChatCompletionRequest, searchModel bool) {
+	ctx := c.Request.Context()
+	maxRetries := len(cookieManager.Cookies)
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		requestBody, err := cheat(requestBody, c, cookie)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		jsonData, err := json.Marshal(requestBody)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to marshal request body"})
+			return
+		}
+		response, err := makeRequest(client, jsonData, cookie, false)
+		if err != nil {
+			logger.Errorf(ctx, "makeRequest err: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		scanner := bufio.NewScanner(strings.NewReader(response.Body))
+		var content string
+		var firstLine string
+		var projectId string
+		isRateLimit := false
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if firstLine == "" {
+				firstLine = line
+			}
+			if line == "" {
+				continue
+			}
+
+			switch {
+			case common.IsCloudflareChallenge(line), common.IsCloudflareBlock(line):
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Cloudflare blocked"})
+				return
+			case common.IsRateLimit(line), common.IsFreeLimit(line), common.IsNotLogin(line):
+				isRateLimit = true
+				config.AddRateLimitCookie(cookie, time.Now().Add(time.Duration(config.RateLimitCookieLockDuration)*time.Second))
+				break
+			case common.IsServiceUnavailablePage(line), common.IsServerError(line):
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
+				return
+			case strings.HasPrefix(line, "data: "):
+				data := strings.TrimPrefix(line, "data: ")
+				var parsedResponse struct {
+					Type       string `json:"type"`
+					FieldName  string `json:"field_name"`
+					FieldValue string `json:"field_value"`
+					Content    string `json:"content"`
+					Id         string `json:"id"`
+					Delta      string `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(data), &parsedResponse); err != nil {
+					continue
+				}
+				if parsedResponse.Type == "project_start" {
+					projectId = parsedResponse.Id
+				}
+				if parsedResponse.Type == "message_field_delta" {
+					if parsedResponse.FieldName == "session_state.answer" ||
+						strings.Contains(parsedResponse.FieldName, "session_state.streaming_detail_answer") {
+						content = content + parsedResponse.Delta
+					}
+				}
+				if parsedResponse.Type == "message_field" {
+					if (openAIReq.Model == "o1" || openAIReq.Model == "o3-mini-high") &&
+						parsedResponse.FieldName == "session_state.answer" {
+						content = parsedResponse.FieldValue
+					}
+				}
+				if parsedResponse.Type == "message_result" {
+					go func() {
+						if config.AutoDelChat == 1 {
+							delClient := cycletls.Init()
+							defer safeClose(delClient)
+							makeDeleteRequest(delClient, cookie, projectId)
+						}
+					}()
+					if content == "" {
+						content = strings.TrimSpace(parsedResponse.Content)
+					}
+					break
+				}
+			}
+		}
+
+		if !isRateLimit && content != "" {
+			// Log model response
+			logger.LogToolEvent(ctx, "MODEL_RAW_RESPONSE", map[string]interface{}{
+				"content_length": len(content),
+				"content":        content,
+			})
+
+			// Save debug payload to file if enabled
+			logger.SaveDebugPayload(ctx, &logger.DebugPayload{
+				RequestID:   fmt.Sprintf("%v", ctx.Value("X-Request-Id")),
+				Timestamp:   time.Now().Format(time.RFC3339),
+				Subsystem:   logger.SubTool,
+				Phase:       "MODEL_RESPONSE",
+				Model:       openAIReq.Model,
+				RawResponse: content,
+			})
+
+			// Parse the response to check for tool calls
+			toolResp, err := tooluse.ParseToolCallFromText(content)
+			if err != nil {
+				// Model didn't follow the format - fallback to regular response
+				logger.LogToolEvent(ctx, "PARSE_FALLBACK", map[string]interface{}{
+					"reason": err.Error(),
+				})
+
+				promptTokens := common.CountTokenText(string(jsonData), openAIReq.Model)
+				completionTokens := common.CountTokenText(content, openAIReq.Model)
+				finishReason := "stop"
+
+				c.JSON(http.StatusOK, model.OpenAIChatCompletionResponse{
+					ID:      fmt.Sprintf(responseIDFormat, time.Now().Format("20060102150405")),
+					Object:  "chat.completion",
+					Created: time.Now().Unix(),
+					Model:   openAIReq.Model,
+					Choices: []model.OpenAIChoice{{
+						Message: model.OpenAIMessage{
+							Role:    "assistant",
+							Content: content,
+						},
+						FinishReason: &finishReason,
+					}},
+					Usage: model.OpenAIUsage{
+						PromptTokens:     promptTokens,
+						CompletionTokens: completionTokens,
+						TotalTokens:      promptTokens + completionTokens,
+					},
+				})
+				return
+			}
+
+			// Validate tool call if it's a tool call
+			if err := tooluse.ValidateToolCall(toolResp, openAIReq.Tools); err != nil {
+				c.JSON(http.StatusBadRequest, model.OpenAIErrorResponse{
+					OpenAIError: model.OpenAIError{
+						Message: err.Error(),
+						Type:    "invalid_tool_call",
+						Code:    "400",
+					},
+				})
+				return
+			}
+
+			promptTokens := common.CountTokenText(string(jsonData), openAIReq.Model)
+			completionTokens := common.CountTokenText(content, openAIReq.Model)
+
+			if tooluse.IsToolCallResponse(toolResp) {
+				// Convert to OpenAI tool call format
+				toolCall, err := tooluse.ConvertToOpenAIToolCall(toolResp)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+
+				finishReason := "tool_calls"
+				c.JSON(http.StatusOK, model.OpenAIChatCompletionResponse{
+					ID:      fmt.Sprintf(responseIDFormat, time.Now().Format("20060102150405")),
+					Object:  "chat.completion",
+					Created: time.Now().Unix(),
+					Model:   openAIReq.Model,
+					Choices: []model.OpenAIChoice{{
+						Message: model.OpenAIMessage{
+							Role:      "assistant",
+							Content:   "",
+							ToolCalls: []model.OpenAIToolCall{*toolCall},
+						},
+						FinishReason: &finishReason,
+					}},
+					Usage: model.OpenAIUsage{
+						PromptTokens:     promptTokens,
+						CompletionTokens: completionTokens,
+						TotalTokens:      promptTokens + completionTokens,
+					},
+				})
+			} else {
+				// Regular response
+				finishReason := "stop"
+				c.JSON(http.StatusOK, model.OpenAIChatCompletionResponse{
+					ID:      fmt.Sprintf(responseIDFormat, time.Now().Format("20060102150405")),
+					Object:  "chat.completion",
+					Created: time.Now().Unix(),
+					Model:   openAIReq.Model,
+					Choices: []model.OpenAIChoice{{
+						Message: model.OpenAIMessage{
+							Role:    "assistant",
+							Content: toolResp.Content,
+						},
+						FinishReason: &finishReason,
+					}},
+					Usage: model.OpenAIUsage{
+						PromptTokens:     promptTokens,
+						CompletionTokens: completionTokens,
+						TotalTokens:      promptTokens + completionTokens,
+					},
+				})
+			}
+			return
+		}
+
+		cookie, err = cookieManager.GetNextCookie()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "No more valid cookies available"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "All cookies are temporarily unavailable."})
+}
+
+// handleToolUseStreamRequest handles streaming tool use requests
+func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string, cookieManager *config.CookieManager, requestBody map[string]interface{}, openAIReq *model.OpenAIChatCompletionRequest, searchModel bool) {
+	ctx := c.Request.Context()
+	maxRetries := len(cookieManager.Cookies)
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	responseId := fmt.Sprintf(responseIDFormat, time.Now().Format("20060102150405"))
+
+	c.Stream(func(w io.Writer) bool {
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			requestBody, err := cheat(requestBody, c, cookie)
+			if err != nil {
+				return false
+			}
+			jsonData, err := json.Marshal(requestBody)
+			if err != nil {
+				return false
+			}
+
+			// Accumulate full response for tool parsing
+			var fullContent strings.Builder
+			sseChan, err := makeStreamRequest(c, client, jsonData, cookie)
+			if err != nil {
+				return false
+			}
+
+			isRateLimit := false
+			for response := range sseChan {
+				if response.Done {
+					break
+				}
+
+				data := strings.TrimSpace(response.Data)
+				if data == "" {
+					continue
+				}
+
+				if common.IsRateLimit(data) || common.IsFreeLimit(data) || common.IsNotLogin(data) {
+					isRateLimit = true
+					config.AddRateLimitCookie(cookie, time.Now().Add(time.Duration(config.RateLimitCookieLockDuration)*time.Second))
+					break
+				}
+
+				data = strings.TrimPrefix(data, "data: ")
+				if !strings.HasPrefix(data, "{") {
+					continue
+				}
+
+				var event struct {
+					Type      string `json:"type"`
+					FieldName string `json:"field_name"`
+					Delta     string `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(data), &event); err != nil {
+					continue
+				}
+
+				if event.Type == "message_field_delta" {
+					if event.FieldName == "session_state.answer" ||
+						strings.Contains(event.FieldName, "session_state.streaming_detail_answer") {
+						fullContent.WriteString(event.Delta)
+					}
+				}
+			}
+
+			if isRateLimit {
+				cookie, _ = cookieManager.GetNextCookie()
+				continue
+			}
+
+			content := fullContent.String()
+			if content == "" {
+				continue
+			}
+
+			// Parse the complete response
+			toolResp, err := tooluse.ParseToolCallFromText(content)
+			if err != nil {
+				// Model didn't follow the format - fallback to regular response
+				logger.Warnf(ctx, "Model did not follow tool format in stream, returning as regular response: %v", err)
+
+				finishReason := "stop"
+				streamResp := model.OpenAIChatCompletionResponse{
+					ID:      responseId,
+					Object:  "chat.completion.chunk",
+					Created: time.Now().Unix(),
+					Model:   openAIReq.Model,
+					Choices: []model.OpenAIChoice{{
+						Index: 0,
+						Delta: model.OpenAIDelta{
+							Role:    "assistant",
+							Content: content,
+						},
+						FinishReason: &finishReason,
+					}},
+				}
+				sendSSEvent(c, streamResp)
+				c.SSEvent("", " [DONE]")
+				return false
+			}
+
+			if tooluse.IsToolCallResponse(toolResp) {
+				toolCall, err := tooluse.ConvertToOpenAIToolCall(toolResp)
+				if err != nil {
+					return false
+				}
+
+				// Send tool call as streaming chunks
+				finishReason := "tool_calls"
+				streamResp := model.OpenAIChatCompletionResponse{
+					ID:      responseId,
+					Object:  "chat.completion.chunk",
+					Created: time.Now().Unix(),
+					Model:   openAIReq.Model,
+					Choices: []model.OpenAIChoice{{
+						Index: 0,
+						Delta: model.OpenAIDelta{
+							Role: "assistant",
+							ToolCalls: []model.OpenAIDeltaToolCall{{
+								Index: 0,
+								ID:    toolCall.ID,
+								Type:  "function",
+								Function: model.OpenAIDeltaToolCallFunction{
+									Name:      toolCall.Function.Name,
+									Arguments: toolCall.Function.Arguments,
+								},
+							}},
+						},
+						FinishReason: &finishReason,
+					}},
+				}
+				sendSSEvent(c, streamResp)
+			} else {
+				// Send content as streaming chunks
+				finishReason := "stop"
+				streamResp := model.OpenAIChatCompletionResponse{
+					ID:      responseId,
+					Object:  "chat.completion.chunk",
+					Created: time.Now().Unix(),
+					Model:   openAIReq.Model,
+					Choices: []model.OpenAIChoice{{
+						Index: 0,
+						Delta: model.OpenAIDelta{
+							Role:    "assistant",
+							Content: toolResp.Content,
+						},
+						FinishReason: &finishReason,
+					}},
+				}
+				sendSSEvent(c, streamResp)
+			}
+
+			c.SSEvent("", " [DONE]")
+			return false
+		}
+		return false
+	})
 }
 
 func safeClose(client cycletls.CycleTLS) {

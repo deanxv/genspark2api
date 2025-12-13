@@ -55,6 +55,16 @@ var OnlyOpenaiApi = os.Getenv("ONLY_OPENAI_API")
 
 var DebugEnabled = os.Getenv("DEBUG") == "true"
 
+// Debug logging levels
+// DEBUG_LOG_BODY=true - логировать тело запроса/ответа
+// DEBUG_LOG_HEADERS=true - логировать заголовки
+// DEBUG_SAVE_PAYLOADS=true - сохранять детали в файлы logs/debug/
+// DEBUG_LOG_LEVEL=verbose|normal|minimal
+var DebugLogBody = os.Getenv("DEBUG_LOG_BODY") == "true"
+var DebugLogHeaders = os.Getenv("DEBUG_LOG_HEADERS") == "true"
+var DebugSavePayloads = os.Getenv("DEBUG_SAVE_PAYLOADS") == "true"
+var DebugLogLevel = env.String("DEBUG_LOG_LEVEL", "normal") // verbose, normal, minimal
+
 var RateLimitKeyExpirationDuration = 20 * time.Minute
 
 var RequestOutTimeDuration = 5 * time.Minute
@@ -447,6 +457,16 @@ func GetConfigSummary() []string {
 
 	if DebugEnabled {
 		lines = append(lines, "DEBUG: enabled")
+		lines = append(lines, "  DEBUG_LOG_LEVEL: "+DebugLogLevel)
+		if DebugLogBody {
+			lines = append(lines, "  DEBUG_LOG_BODY: enabled")
+		}
+		if DebugLogHeaders {
+			lines = append(lines, "  DEBUG_LOG_HEADERS: enabled")
+		}
+		if DebugSavePayloads {
+			lines = append(lines, "  DEBUG_SAVE_PAYLOADS: enabled")
+		}
 	} else {
 		lines = append(lines, "DEBUG: disabled")
 	}

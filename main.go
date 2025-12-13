@@ -16,6 +16,10 @@ import (
 )
 
 func main() {
+	// Pass log directory from command line flag to logger
+	if *common.LogDir != "" {
+		logger.LogDir = *common.LogDir
+	}
 	logger.SetupLogger()
 	logger.SysLog(fmt.Sprintf("genspark2api %s starting...", common.Version))
 

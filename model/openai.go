@@ -3,10 +3,38 @@ package model
 import "encoding/json"
 
 type OpenAIChatCompletionRequest struct {
-	Model    string              `json:"model"`
-	Stream   bool                `json:"stream"`
-	Messages []OpenAIChatMessage `json:"messages"`
+	Model      string              `json:"model"`
+	Stream     bool                `json:"stream"`
+	Messages   []OpenAIChatMessage `json:"messages"`
+	Tools      []OpenAITool        `json:"tools,omitempty"`
+	ToolChoice interface{}         `json:"tool_choice,omitempty"`
 	OpenAIChatCompletionExtraRequest
+}
+
+// OpenAITool represents a tool definition in the OpenAI API format
+type OpenAITool struct {
+	Type     string             `json:"type"` // "function"
+	Function OpenAIToolFunction `json:"function"`
+}
+
+// OpenAIToolFunction represents the function definition within a tool
+type OpenAIToolFunction struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Parameters  interface{} `json:"parameters,omitempty"` // JSON Schema object
+}
+
+// OpenAIToolCall represents a tool call in the response
+type OpenAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"` // "function"
+	Function OpenAIToolCallFunction `json:"function"`
+}
+
+// OpenAIToolCallFunction represents the function call details
+type OpenAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON string
 }
 
 type OpenAIChatCompletionExtraRequest struct {
@@ -20,10 +48,12 @@ type SessionState struct {
 	AnswerIsFinished bool     `json:"answer_is_finished"`
 }
 type OpenAIChatMessage struct {
-	Role         string        `json:"role"`
-	Content      interface{}   `json:"content"`
-	IsPrompt     bool          `json:"is_prompt"`
-	SessionState *SessionState `json:"session_state"`
+	Role         string           `json:"role"`
+	Content      interface{}      `json:"content"`
+	IsPrompt     bool             `json:"is_prompt"`
+	SessionState *SessionState    `json:"session_state"`
+	ToolCalls    []OpenAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID   string           `json:"tool_call_id,omitempty"`
 }
 
 func (r *OpenAIChatCompletionRequest) AddMessage(message OpenAIChatMessage) {
@@ -76,13 +106,27 @@ func (r *OpenAIChatCompletionRequest) FilterUserMessage() {
 		return
 	}
 
-	// 返回最后一个role为user的元素
+	// Find the last user message
+	var lastUserIdx int = -1
 	for i := len(r.Messages) - 1; i >= 0; i-- {
 		if r.Messages[i].Role == "user" {
-			r.Messages = r.Messages[i:]
+			lastUserIdx = i
 			break
 		}
 	}
+
+	if lastUserIdx == -1 {
+		return
+	}
+
+	// Keep system messages and the last user message
+	var filtered []OpenAIChatMessage
+	for i, msg := range r.Messages {
+		if msg.Role == "system" || i >= lastUserIdx {
+			filtered = append(filtered, msg)
+		}
+	}
+	r.Messages = filtered
 }
 
 type OpenAIErrorResponse struct {
@@ -116,9 +160,10 @@ type OpenAIChoice struct {
 }
 
 type OpenAIMessage struct {
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIUsage struct {
@@ -128,9 +173,24 @@ type OpenAIUsage struct {
 }
 
 type OpenAIDelta struct {
-	Content          string `json:"content,omitempty"`
-	Role             string `json:"role,omitempty"`
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Content          string                `json:"content,omitempty"`
+	Role             string                `json:"role,omitempty"`
+	ReasoningContent string                `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIDeltaToolCall `json:"tool_calls,omitempty"`
+}
+
+// OpenAIDeltaToolCall represents a tool call chunk in streaming response
+type OpenAIDeltaToolCall struct {
+	Index    int                         `json:"index"`
+	ID       string                      `json:"id,omitempty"`
+	Type     string                      `json:"type,omitempty"` // "function"
+	Function OpenAIDeltaToolCallFunction `json:"function,omitempty"`
+}
+
+// OpenAIDeltaToolCallFunction represents function call chunk in streaming
+type OpenAIDeltaToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type OpenAIImagesGenerationRequest struct {
