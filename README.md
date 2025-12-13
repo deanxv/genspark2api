@@ -1,5 +1,5 @@
 <p align="right">
-   <strong>中文</strong> 
+   <strong>中文 | <a href="README_EN.md">English</a></strong> 
 </p>
 <div align="center">
 
@@ -13,6 +13,31 @@ _觉得有点意思的话 别忘了点个 ⭐_
 
 <sup><i>AI Wave 社群</i></sup> · <sup><i>(群内提供公益API、AI机器人)</i></sup>
 
+---
+
+**Genspark2API** 是一个使用 Go 语言编写的高性能代理服务，用于将 **Genspark.ai** 的能力封装为 **兼容 OpenAI 标准的 API 接口**。
+
+### 🌟 核心特性
+
+- 🤖 **对话大模型**：支持 GPT-5.1 系列、Claude Opus/Sonnet 4.5、Gemini 3、O3-Pro 等主流模型
+- 🖼️ **文生图能力**：支持 DALL·E、Flux、Imagen4 等多种绘图模型
+- 🎬 **文/图生视频**：支持 Sora-2、Veo3、Kling、Runway 等视频生成模型
+- 🔄 **OpenAI API 兼容**：可直接接入任何兼容 OpenAI 的客户端/中间件
+- 🛡️ **智能防护绕过**：内置 Cloudflare 与 ReCaptcha v3 相关处理逻辑（需按文档配置）
+- 🔀 **多 Cookie 池轮询**：自动在多个账号之间分流，请求失败自动切换重试
+- 🔧 **Tool Calling 支持**：支持 OpenAI 风格的工具调用（function calling）
+- 🌐 **联网搜索**：模型名后加 `-search` 即可开启联网搜索（如: `gpt-5.1-search`）
+- 📊 **流式响应**：支持 SSE 流式输出，体验与官方 OpenAI 接口一致
+
+### 📦 快速开始
+
+```bash
+docker run -d --name genspark2api \
+  -p 7055:7055 \
+  -e GS_COOKIE="你的_genspark_cookie" \
+  -e API_SECRET="你的_api_secret" \
+  deanxv/genspark2api:latest
+```
 
 </div>
 
@@ -23,27 +48,33 @@ _觉得有点意思的话 别忘了点个 ⭐_
 ## 功能
 
 - [x] 支持对话接口(流式/非流式)(`/chat/completions`)(请求非以下列表的模型会触发`Mixture-of-Agents`模式)
-    - **gpt-5-minimal**
-    - **gpt-5**
-    - **gpt-5-high**
+    - **gpt-5.1-low**
+    - **gpt-5.1**
+    - **gpt-5.1-high**
     - **gpt-5-pro**
-    - **gpt-4.1**
-    - **o1**
-    - **o3**
+    - ~~**gpt-5-minimal**~~
+    - ~~**gpt-5**~~
+    - ~~**gpt-5-high**~~
+    - ~~**gpt-4.1**~~
+    - ~~**o1**~~
+    - ~~**o3**~~
     - **o3-pro**
-    - **o4-mini-high**
-    - **claude-3-7-sonnet-thinking**
-    - **claude-3-7-sonnet**
+    - ~~**o4-mini-high**~~
+    - ~~**claude-3-7-sonnet-thinking**~~
+    - ~~**claude-3-7-sonnet**~~
     - **claude-sonnet-4-5**
-    - **claude-sonnet-4-thinking**
-    - **claude-sonnet-4**
+    - ~~**claude-sonnet-4-thinking**~~
+    - ~~**claude-sonnet-4**~~
+    - **claude-opus-4-5**
     - **claude-opus-4-1**
-    - **claude-opus-4**
+    - **claude-4-5-haiku**
+    - ~~**claude-opus-4**~~
     - **gemini-2.5-pro**
-    - **gemini-2.5-flash**
-    - **gemini-2.0-flash**
-    - **deep-seek-v3**
-    - **deep-seek-r1**
+    - **gemini-3-pro-preview**
+    - ~~**gemini-2.5-flash**~~
+    - ~~**gemini-2.0-flash**~~
+    - ~~**deep-seek-v3**~~
+    - ~~**deep-seek-r1**~~
     - **grok-4-0709**
 - [x] 支持**联网搜索**,在模型名后添加`-search`即可(如:`gpt-4o-search`)
 - [x] 支持识别**图片**/**文件**多轮对话
