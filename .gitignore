@@ -4,3 +4,6 @@ upload
 *.exe
 *.db
 build
+
+genspark2api
+genspark2api-macos

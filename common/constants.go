@@ -55,6 +55,8 @@ var TextModelList = []string{
 	"gpt-5.1",
 	"gpt-5.1-high",
 	"gpt-5-pro",
+	"gpt-5.2",
+	"gpt-5.2-pro",
 	//"o3",
 	"o3-pro",
 	//"claude-3-7-sonnet-thinking",

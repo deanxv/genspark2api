@@ -146,36 +146,43 @@ type OpenAIChatCompletionResponse struct {
 	Created           int64          `json:"created"`
 	Model             string         `json:"model"`
 	Choices           []OpenAIChoice `json:"choices"`
-	Usage             OpenAIUsage    `json:"usage"`
+	Usage             *OpenAIUsage   `json:"usage,omitempty"`
 	SystemFingerprint *string        `json:"system_fingerprint"`
 	Suggestions       []string       `json:"suggestions"`
 }
 
 type OpenAIChoice struct {
-	Index        int           `json:"index"`
-	Message      OpenAIMessage `json:"message"`
-	LogProbs     *string       `json:"logprobs"`
-	FinishReason *string       `json:"finish_reason"`
-	Delta        OpenAIDelta   `json:"delta"`
+	Index        int            `json:"index"`
+	Message      *OpenAIMessage `json:"message,omitempty"`
+	LogProbs     *string        `json:"logprobs"`
+	FinishReason *string        `json:"finish_reason"`
+	Delta        *OpenAIDelta   `json:"delta,omitempty"`
 }
 
 type OpenAIMessage struct {
 	Role             string           `json:"role"`
 	Content          string           `json:"content"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	Reasoning        string           `json:"reasoning,omitempty"`
 	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                            `json:"prompt_tokens"`
+	CompletionTokens        int                            `json:"completion_tokens"`
+	TotalTokens             int                            `json:"total_tokens"`
+	CompletionTokensDetails *OpenAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type OpenAICompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 type OpenAIDelta struct {
 	Content          string                `json:"content,omitempty"`
 	Role             string                `json:"role,omitempty"`
 	ReasoningContent string                `json:"reasoning_content,omitempty"`
+	Reasoning        string                `json:"reasoning,omitempty"`
 	ToolCalls        []OpenAIDeltaToolCall `json:"tool_calls,omitempty"`
 }
 

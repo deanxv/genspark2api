@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/deanxv/CycleTLS/cycletls"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/samber/lo"
 )
 
@@ -29,6 +31,7 @@ const (
 const (
 	baseURL          = "https://www.genspark.ai"
 	apiEndpoint      = baseURL + "/api/copilot/ask"
+	loginEndpoint    = baseURL + "/api/is_login"
 	deleteEndpoint   = baseURL + "/api/project/delete?project_id=%s"
 	uploadEndpoint   = baseURL + "/api/get_upload_personal_image_url"
 	chatType         = "COPILOT_MOA_CHAT"
@@ -79,6 +82,9 @@ func ChatForOpenAI(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errNoValidCookies})
 		return
 	}
+
+	// Check login status
+	checkLogin(c, client, cookie)
 
 	if lo.Contains(common.ImageModelList, openAIReq.Model) {
 		responseId := fmt.Sprintf(responseIDFormat, time.Now().Format("20060102150405"))
@@ -154,14 +160,14 @@ func ChatForOpenAI(c *gin.Context) {
 					Model:   openAIReq.Model,
 					Choices: []model.OpenAIChoice{
 						{
-							Message: model.OpenAIMessage{
+							Message: &model.OpenAIMessage{
 								Role:    "assistant",
 								Content: strings.Join(content, "\n"),
 							},
 							FinishReason: &finishReason,
 						},
 					},
-					Usage: model.OpenAIUsage{
+					Usage: &model.OpenAIUsage{
 						PromptTokens:     promptTokens,
 						CompletionTokens: completionTokens,
 						TotalTokens:      promptTokens + completionTokens,
@@ -578,8 +584,20 @@ func createImageRequestBody(c *gin.Context, cookie string, openAIReq *model.Open
 
 // createStreamResponse 创建流式响应
 func createStreamResponse(responseId, modelName string, jsonData []byte, delta model.OpenAIDelta, finishReason *string) model.OpenAIChatCompletionResponse {
-	promptTokens := common.CountTokenText(string(jsonData), modelName)
-	completionTokens := common.CountTokenText(delta.Content, modelName)
+	var usage *model.OpenAIUsage
+	if finishReason != nil {
+		promptTokens := common.CountTokenText(string(jsonData), modelName)
+		completionTokens := common.CountTokenText(delta.Content, modelName)
+		reasoningTokens := common.CountTokenText(delta.ReasoningContent, modelName)
+		usage = &model.OpenAIUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+			CompletionTokensDetails: &model.OpenAICompletionTokensDetails{
+				ReasoningTokens: reasoningTokens,
+			},
+		}
+	}
 	return model.OpenAIChatCompletionResponse{
 		ID:      responseId,
 		Object:  "chat.completion.chunk",
@@ -588,20 +606,16 @@ func createStreamResponse(responseId, modelName string, jsonData []byte, delta m
 		Choices: []model.OpenAIChoice{
 			{
 				Index:        0,
-				Delta:        delta,
+				Delta:        &delta,
 				FinishReason: finishReason,
 			},
 		},
-		Usage: model.OpenAIUsage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      promptTokens + completionTokens,
-		},
+		Usage: usage,
 	}
 }
 
 // handleMessageFieldDelta 处理消息字段增量
-func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, responseId, modelName string, jsonData []byte) error {
+func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, responseId, modelName string, jsonData []byte, totalContent, totalReasoningContent *string) error {
 	fieldName, ok := event["field_name"].(string)
 	if !ok {
 		return nil
@@ -610,7 +624,8 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 	// 基础允许列表（所有配置下都需要处理的字段）
 	baseAllowed := fieldName == "session_state.answer" ||
 		strings.Contains(fieldName, "session_state.streaming_detail_answer") ||
-		fieldName == "session_state.streaming_markmap"
+		fieldName == "session_state.streaming_markmap" ||
+		strings.HasPrefix(fieldName, "session_state.layer_")
 
 	// 需要显示思考过程时需要额外处理的字段
 	if config.ReasoningHide != 1 {
@@ -641,11 +656,14 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 			return nil
 		case "session_state.answerthink":
 			// 发送reasoning内容到reasoning_content字段
+			if totalReasoningContent != nil {
+				*totalReasoningContent += delta
+			}
 			streamResp := createStreamResponse(
 				responseId,
 				modelName,
 				jsonData,
-				model.OpenAIDelta{ReasoningContent: delta, Role: "assistant"},
+				model.OpenAIDelta{ReasoningContent: delta, Reasoning: delta, Role: "assistant"},
 				nil,
 			)
 			return sendSSEvent(c, streamResp)
@@ -656,13 +674,41 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 	}
 
 	// 发送普通content
+	// 发送普通content
+	var deltaRole string
+	var deltaContent string
+	var deltaReasoningContent string
+
+	if strings.HasPrefix(fieldName, "session_state.layer_") {
+		deltaReasoningContent = delta
+		if totalReasoningContent != nil {
+			*totalReasoningContent += delta
+		}
+	} else {
+		deltaContent = delta
+		if totalContent != nil {
+			*totalContent += delta
+		}
+	}
+
 	streamResp := createStreamResponse(
 		responseId,
 		modelName,
 		jsonData,
-		model.OpenAIDelta{Content: delta, Role: "assistant"},
+		model.OpenAIDelta{
+			Content:          deltaContent,
+			ReasoningContent: deltaReasoningContent,
+			Reasoning:        deltaReasoningContent,
+			Role:             deltaRole, // Role defaults to "" which is fine, usually "assistant" is sent once or inferred
+		},
 		nil,
 	)
+	// Ensure Role is set if needed, though usually Delta just updates content.
+	// Actually, upstream logic had Role: "assistant" separately. Let's keep it safe.
+	if streamResp.Choices[0].Delta.Role == "" {
+		streamResp.Choices[0].Delta.Role = "assistant"
+	}
+
 	return sendSSEvent(c, streamResp)
 }
 
@@ -765,29 +811,44 @@ func makeImageRequest(client cycletls.CycleTLS, jsonData []byte, cookie string) 
 	}, "POST")
 }
 
-func makeDeleteRequest(client cycletls.CycleTLS, cookie, projectId string) (cycletls.Response, error) {
+func makeDeleteRequest(c *gin.Context, client cycletls.CycleTLS, cookie, projectId string) (cycletls.Response, error) {
+	ctx := c.Request.Context()
+
+	// Проверка на пустой projectId - критическая проблема
+	if strings.TrimSpace(projectId) == "" {
+		logger.Warnf(ctx, "[DELETE] SKIP: projectId is empty, cannot delete anything")
+		return cycletls.Response{}, fmt.Errorf("projectId is empty")
+	}
+
+	logger.Infof(ctx, "[DELETE] ATTEMPT: Trying to delete chat projectId=%s", projectId)
 
 	// 不删除环境变量中的map中的对话 (Don't delete chats from configured maps)
 
 	for _, v := range config.ModelChatMap {
 		if v == projectId {
+			logger.Infof(ctx, "[DELETE] SKIP: projectId=%s found in MODEL_CHAT_MAP (configured to keep)", projectId)
 			return cycletls.Response{}, nil
 		}
 	}
 	for _, v := range config.GlobalSessionManager.GetChatIDsByCookie(cookie) {
 		if v == projectId {
+			logger.Infof(ctx, "[DELETE] SKIP: projectId=%s found in GlobalSessionManager (configured to keep)", projectId)
 			return cycletls.Response{}, nil
 		}
 	}
 	for _, v := range config.SessionImageChatMap {
 		if v == projectId {
+			logger.Infof(ctx, "[DELETE] SKIP: projectId=%s found in SESSION_IMAGE_CHAT_MAP (configured to keep)", projectId)
 			return cycletls.Response{}, nil
 		}
 	}
 
 	accept := "application/json"
+	deleteURL := fmt.Sprintf(deleteEndpoint, projectId)
 
-	return client.Do(fmt.Sprintf(deleteEndpoint, projectId), cycletls.Options{
+	logger.Infof(ctx, "[DELETE] SENDING: HTTP GET to %s", deleteURL)
+
+	response, err := client.Do(deleteURL, cycletls.Options{
 		Timeout: 10 * 60 * 60,
 		Proxy:   config.ProxyUrl,
 		Method:  "GET",
@@ -800,6 +861,20 @@ func makeDeleteRequest(client cycletls.CycleTLS, cookie, projectId string) (cycl
 			"User-Agent":   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
 		},
 	}, "GET")
+
+	if err != nil {
+		logger.Errorf(ctx, "[DELETE] ERROR: Failed to delete projectId=%s, error=%v", projectId, err)
+		return response, err
+	}
+
+	// Детальное логирование результата
+	if response.Status == 200 {
+		logger.Debugf(ctx, "[DELETE] SUCCESS: projectId=%s deleted successfully, Status=%d", projectId, response.Status)
+	} else {
+		logger.Warnf(ctx, "[DELETE] FAILED: projectId=%s, Status=%d, Body=%s", projectId, response.Status, strings.TrimSpace(response.Body))
+	}
+
+	return response, nil
 }
 
 func makeGetUploadUrlRequest(client cycletls.CycleTLS, cookie string) (cycletls.Response, error) {
@@ -914,6 +989,9 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 
 			var projectId string
 			isRateLimit := false
+			var totalContent string
+			var totalReasoningContent string
+
 		SSELoop:
 			for response := range sseChan {
 				if response.Done {
@@ -966,10 +1044,32 @@ func handleStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie string
 				}
 
 				// 处理事件流数据
-				if shouldContinue := processStreamData(c, data, &projectId, cookie, responseId, modelName, jsonData, searchModel); !shouldContinue {
+				if shouldContinue := processStreamData(c, data, &projectId, cookie, responseId, modelName, jsonData, searchModel, &totalContent, &totalReasoningContent); !shouldContinue {
 					return false
 				}
 			}
+
+			// Send final usage
+			promptTokens := common.CountTokenText(string(jsonData), modelName)
+			completionTokens := common.CountTokenText(totalContent, modelName)
+			reasoningTokens := common.CountTokenText(totalReasoningContent, modelName)
+
+			usageResp := model.OpenAIChatCompletionResponse{
+				ID:      responseId,
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   modelName,
+				Choices: []model.OpenAIChoice{},
+				Usage: &model.OpenAIUsage{
+					PromptTokens:     promptTokens,
+					CompletionTokens: completionTokens,
+					TotalTokens:      promptTokens + completionTokens,
+					CompletionTokensDetails: &model.OpenAICompletionTokensDetails{
+						ReasoningTokens: reasoningTokens,
+					},
+				},
+			}
+			sendSSEvent(c, usageResp)
 
 			if !isRateLimit {
 				return true
@@ -1070,7 +1170,7 @@ func cheat(requestBody map[string]interface{}, c *gin.Context, cookie string) (m
 }
 
 // 处理流式数据的辅助函数，返回bool表示是否继续处理
-func processStreamData(c *gin.Context, data string, projectId *string, cookie, responseId, model string, jsonData []byte, searchModel bool) bool {
+func processStreamData(c *gin.Context, data string, projectId *string, cookie, responseId, model string, jsonData []byte, searchModel bool, totalContent, totalReasoningContent *string) bool {
 	data = strings.TrimSpace(data)
 	//if !strings.HasPrefix(data, "data: ") {
 	//	return true
@@ -1095,30 +1195,42 @@ func processStreamData(c *gin.Context, data string, projectId *string, cookie, r
 	case "project_start":
 		*projectId, _ = event["id"].(string)
 	case "message_field":
-		if err := handleMessageFieldDelta(c, event, responseId, model, jsonData); err != nil {
+		if err := handleMessageFieldDelta(c, event, responseId, model, jsonData, totalContent, totalReasoningContent); err != nil {
 			logger.Errorf(c.Request.Context(), "handleMessageFieldDelta err: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return false
 		}
 	case "message_field_delta":
-		if err := handleMessageFieldDelta(c, event, responseId, model, jsonData); err != nil {
+		if err := handleMessageFieldDelta(c, event, responseId, model, jsonData, totalContent, totalReasoningContent); err != nil {
 			logger.Errorf(c.Request.Context(), "handleMessageFieldDelta err: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return false
 		}
+
 	case "message_result":
-		go func() {
+		// Сохраняем значения для горутины
+		currentProjectId := ""
+		if projectId != nil {
+			currentProjectId = *projectId
+		}
+		go func(pid string, ck string, mdl string, gc *gin.Context) {
+			ctx := gc.Request.Context()
 			if config.AutoModelChatMapType == 1 {
-				// 保存映射
-				config.GlobalSessionManager.AddSession(cookie, model, *projectId)
+				logger.Infof(ctx, "[DELETE] STREAM: Saving session instead of deleting, projectId=%s, model=%s", pid, mdl)
+				config.GlobalSessionManager.AddSession(ck, mdl, pid)
 			} else {
 				if config.AutoDelChat == 1 {
+					logger.Infof(ctx, "[DELETE] STREAM: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
 					client := cycletls.Init()
 					defer safeClose(client)
-					makeDeleteRequest(client, cookie, *projectId)
+					if _, err := makeDeleteRequest(gc, client, ck, pid); err != nil {
+						logger.Errorf(ctx, "[DELETE] STREAM: Delete failed for projectId=%s, error=%v", pid, err)
+					}
+				} else {
+					logger.Debugf(ctx, "[DELETE] STREAM: Auto-delete disabled, skipping projectId=%s", pid)
 				}
 			}
-		}()
+		}(currentProjectId, cookie, model, c)
 
 		return handleMessageResult(c, event, responseId, model, jsonData, searchModel)
 	}
@@ -1344,6 +1456,10 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 						content = content + parsedResponse.Delta
 					}
 					// Собираем reasoning/thinking контент
+					if strings.HasPrefix(parsedResponse.FieldName, "session_state.layer_") {
+						reasoningContent = reasoningContent + parsedResponse.Delta
+					}
+
 					if config.ReasoningHide != 1 {
 						if parsedResponse.FieldName == "session_state.answerthink" {
 							reasoningContent = reasoningContent + parsedResponse.Delta
@@ -1358,17 +1474,24 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 				}
 				if parsedResponse.Type == "message_result" {
 					// Удаление/сохранение сессии
-					go func() {
+					go func(pid string, ck string, mdl string, gc *gin.Context) {
+						ctx := gc.Request.Context()
 						if config.AutoModelChatMapType == 1 {
-							config.GlobalSessionManager.AddSession(cookie, modelName, projectId)
+							logger.Infof(ctx, "[DELETE] NON-STREAM: Saving session instead of deleting, projectId=%s, model=%s", pid, mdl)
+							config.GlobalSessionManager.AddSession(ck, mdl, pid)
 						} else {
 							if config.AutoDelChat == 1 {
+								logger.Infof(ctx, "[DELETE] NON-STREAM: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
 								client := cycletls.Init()
 								defer safeClose(client)
-								makeDeleteRequest(client, cookie, projectId)
+								if _, err := makeDeleteRequest(gc, client, ck, pid); err != nil {
+									logger.Errorf(ctx, "[DELETE] NON-STREAM: Delete failed for projectId=%s, error=%v", pid, err)
+								}
+							} else {
+								logger.Debugf(ctx, "[DELETE] NON-STREAM: Auto-delete disabled, skipping projectId=%s", pid)
 							}
 						}
-					}()
+					}(projectId, cookie, modelName, c)
 					// Если content пустой, попробуем взять из message_result
 					if content == "" {
 						if modelName == "o1" && searchModel {
@@ -1400,17 +1523,21 @@ func handleNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie str
 					Created: time.Now().Unix(),
 					Model:   modelName,
 					Choices: []model.OpenAIChoice{{
-						Message: model.OpenAIMessage{
+						Message: &model.OpenAIMessage{
 							Role:             "assistant",
 							Content:          content,
 							ReasoningContent: reasoningContent,
+							Reasoning:        reasoningContent,
 						},
 						FinishReason: &finishReason,
 					}},
-					Usage: model.OpenAIUsage{
+					Usage: &model.OpenAIUsage{
 						PromptTokens:     promptTokens,
 						CompletionTokens: completionTokens,
 						TotalTokens:      promptTokens + completionTokens,
+						CompletionTokensDetails: &model.OpenAICompletionTokensDetails{
+							ReasoningTokens: common.CountTokenText(reasoningContent, modelName),
+						},
 					},
 				})
 				return
@@ -1671,11 +1798,15 @@ func ImageProcess(c *gin.Context, client cycletls.CycleTLS, openAIReq model.Open
 		if len(result.Data) > 0 {
 			// Delete temporary session if needed
 			if config.AutoDelChat == 1 {
-				go func() {
-					client := cycletls.Init()
-					defer safeClose(client)
-					makeDeleteRequest(client, cookie, projectId)
-				}()
+				go func(pid string, ck string, gc *gin.Context) {
+					ctx := gc.Request.Context()
+					logger.Infof(ctx, "[DELETE] IMAGE: Auto-delete enabled, projectId=%s", pid)
+					delClient := cycletls.Init()
+					defer safeClose(delClient)
+					if _, err := makeDeleteRequest(gc, delClient, ck, pid); err != nil {
+						logger.Errorf(ctx, "[DELETE] IMAGE: Delete failed for projectId=%s, error=%v", pid, err)
+					}
+				}(projectId, cookie, c)
 			}
 			return result, nil
 		}
@@ -1875,16 +2006,21 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 	maxRetries := len(cookieManager.Cookies)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		logger.Debugf(ctx, "Attempt %d/%d with cookie: %s...", attempt+1, maxRetries, cookie[:10])
+
 		requestBody, err := cheat(requestBody, c, cookie)
 		if err != nil {
+			logger.Errorf(ctx, "cheat err: %v", err)
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		jsonData, err := json.Marshal(requestBody)
 		if err != nil {
+			logger.Errorf(ctx, "json marshal err: %v", err)
 			c.JSON(500, gin.H{"error": "Failed to marshal request body"})
 			return
 		}
+
 		response, err := makeRequest(client, jsonData, cookie, false)
 		if err != nil {
 			logger.Errorf(ctx, "makeRequest err: %v", err)
@@ -1909,13 +2045,16 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 
 			switch {
 			case common.IsCloudflareChallenge(line), common.IsCloudflareBlock(line):
+				logger.Errorf(ctx, "Cloudflare blocked: %s", line)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Cloudflare blocked"})
 				return
 			case common.IsRateLimit(line), common.IsFreeLimit(line), common.IsNotLogin(line):
+				logger.Warnf(ctx, "Rate limit/Auth error: %s", line)
 				isRateLimit = true
 				config.AddRateLimitCookie(cookie, time.Now().Add(time.Duration(config.RateLimitCookieLockDuration)*time.Second))
 				break
 			case common.IsServiceUnavailablePage(line), common.IsServerError(line):
+				logger.Errorf(ctx, "Server error: %s", line)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
 				return
 			case strings.HasPrefix(line, "data: "):
@@ -1933,6 +2072,7 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 				}
 				if parsedResponse.Type == "project_start" {
 					projectId = parsedResponse.Id
+					logger.Debugf(ctx, "Project started: %s", projectId)
 				}
 				if parsedResponse.Type == "message_field_delta" {
 					if parsedResponse.FieldName == "session_state.answer" ||
@@ -1947,13 +2087,19 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 					}
 				}
 				if parsedResponse.Type == "message_result" {
-					go func() {
+					go func(pid string, ck string, mdl string, gc *gin.Context) {
+						ctx := gc.Request.Context()
 						if config.AutoDelChat == 1 {
+							logger.Infof(ctx, "[DELETE] TOOL-USE: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
 							delClient := cycletls.Init()
 							defer safeClose(delClient)
-							makeDeleteRequest(delClient, cookie, projectId)
+							if _, err := makeDeleteRequest(gc, delClient, ck, pid); err != nil {
+								logger.Errorf(ctx, "[DELETE] TOOL-USE: Delete failed for projectId=%s, error=%v", pid, err)
+							}
+						} else {
+							logger.Debugf(ctx, "[DELETE] TOOL-USE: Auto-delete disabled, skipping projectId=%s", pid)
 						}
-					}()
+					}(projectId, cookie, openAIReq.Model, c)
 					if content == "" {
 						content = strings.TrimSpace(parsedResponse.Content)
 					}
@@ -1997,13 +2143,13 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 					Created: time.Now().Unix(),
 					Model:   openAIReq.Model,
 					Choices: []model.OpenAIChoice{{
-						Message: model.OpenAIMessage{
+						Message: &model.OpenAIMessage{
 							Role:    "assistant",
 							Content: content,
 						},
 						FinishReason: &finishReason,
 					}},
-					Usage: model.OpenAIUsage{
+					Usage: &model.OpenAIUsage{
 						PromptTokens:     promptTokens,
 						CompletionTokens: completionTokens,
 						TotalTokens:      promptTokens + completionTokens,
@@ -2042,14 +2188,14 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 					Created: time.Now().Unix(),
 					Model:   openAIReq.Model,
 					Choices: []model.OpenAIChoice{{
-						Message: model.OpenAIMessage{
+						Message: &model.OpenAIMessage{
 							Role:      "assistant",
 							Content:   "",
 							ToolCalls: []model.OpenAIToolCall{*toolCall},
 						},
 						FinishReason: &finishReason,
 					}},
-					Usage: model.OpenAIUsage{
+					Usage: &model.OpenAIUsage{
 						PromptTokens:     promptTokens,
 						CompletionTokens: completionTokens,
 						TotalTokens:      promptTokens + completionTokens,
@@ -2064,13 +2210,13 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 					Created: time.Now().Unix(),
 					Model:   openAIReq.Model,
 					Choices: []model.OpenAIChoice{{
-						Message: model.OpenAIMessage{
+						Message: &model.OpenAIMessage{
 							Role:    "assistant",
 							Content: toolResp.Content,
 						},
 						FinishReason: &finishReason,
 					}},
-					Usage: model.OpenAIUsage{
+					Usage: &model.OpenAIUsage{
 						PromptTokens:     promptTokens,
 						CompletionTokens: completionTokens,
 						TotalTokens:      promptTokens + completionTokens,
@@ -2102,26 +2248,44 @@ func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie
 	responseId := fmt.Sprintf(responseIDFormat, time.Now().Format("20060102150405"))
 
 	c.Stream(func(w io.Writer) bool {
+		logger.Debugf(ctx, "Starting stream loop. MaxRetries=%d", maxRetries)
 		for attempt := 0; attempt < maxRetries; attempt++ {
+			logger.Debugf(ctx, "Attempt %d/%d with cookie: %s...", attempt+1, maxRetries, cookie[:10])
+
 			requestBody, err := cheat(requestBody, c, cookie)
 			if err != nil {
+				logger.Errorf(ctx, "cheat err: %v", err)
 				return false
 			}
 			jsonData, err := json.Marshal(requestBody)
 			if err != nil {
+				logger.Errorf(ctx, "json marshal err: %v", err)
 				return false
 			}
 
-			// Accumulate full response for tool parsing
-			var fullContent strings.Builder
+			// Use incremental parser
+			parser := tooluse.NewStreamParser()
+			logger.Debugf(ctx, "Making stream request...")
 			sseChan, err := makeStreamRequest(c, client, jsonData, cookie)
 			if err != nil {
+				logger.Errorf(ctx, "makeStreamRequest err: %v", err)
 				return false
 			}
 
+			// Track if we sent any tool call ID (only need to send once)
+			toolCallSent := false
+			toolCallID := "call_" + uuid.New().String()[:8]
+
+			var totalContent string
+			var totalReasoning string
+
 			isRateLimit := false
+			var projectId string
+
+			logger.Debugf(ctx, "Reading from sseChan...")
 			for response := range sseChan {
 				if response.Done {
+					logger.Debugf(ctx, "SSE Channel closed/done.")
 					break
 				}
 
@@ -2129,8 +2293,10 @@ func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie
 				if data == "" {
 					continue
 				}
+				logger.Debugf(ctx, "Received SSE Data: %s", data)
 
 				if common.IsRateLimit(data) || common.IsFreeLimit(data) || common.IsNotLogin(data) {
+					logger.Warnf(ctx, "Cookie invalid/rate-limited: %s", data)
 					isRateLimit = true
 					config.AddRateLimitCookie(cookie, time.Now().Add(time.Duration(config.RateLimitCookieLockDuration)*time.Second))
 					break
@@ -2141,19 +2307,153 @@ func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie
 					continue
 				}
 
-				var event struct {
-					Type      string `json:"type"`
-					FieldName string `json:"field_name"`
-					Delta     string `json:"delta"`
-				}
-				if err := json.Unmarshal([]byte(data), &event); err != nil {
+				var chunk string
+
+				// Re-implementing correctly:
+				// Need to parse generic map first to check type and id
+				var eventMap map[string]interface{}
+				if err := json.Unmarshal([]byte(data), &eventMap); err != nil {
+					logger.Debugf(ctx, "Failed to unmarshal event: %v", err)
 					continue
 				}
 
-				if event.Type == "message_field_delta" {
-					if event.FieldName == "session_state.answer" ||
-						strings.Contains(event.FieldName, "session_state.streaming_detail_answer") {
-						fullContent.WriteString(event.Delta)
+				eventType, _ := eventMap["type"].(string)
+				// logger.Debugf(ctx, "Event Type: %s", eventType)
+
+				if eventType == "project_start" {
+					if id, ok := eventMap["id"].(string); ok {
+						projectId = id
+						logger.Debugf(ctx, "CHAT_CREATED: Stream started with projectId=%s", projectId)
+					}
+				} else if eventType == "message_result" {
+					logger.Debugf(ctx, "STREAM_COMPLETE: Received message_result for projectId=%s", projectId)
+					// Trigger deletion
+					go func(pid string, ck string, mdl string, gc *gin.Context) {
+						if pid == "" {
+							return
+						}
+						// Create a new context for the goroutine to avoid using the cancelled request context
+						// But for logging we might want original trace id?
+						// Usually better to use Background or detached context if request ends.
+						// For now, keeping as is but be aware of context cancellation.
+						ctx := context.Background()
+
+						if config.AutoDelChat == 1 {
+							logger.Debugf(ctx, "[DELETE] TOOL-STREAM: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
+							delClient := cycletls.Init()
+							defer safeClose(delClient)
+							// Note: makeDeleteRequest uses gc (gin.Context). If request is done, this might be issue.
+							// But usually safe enough for quick calls.
+							if _, err := makeDeleteRequest(gc, delClient, ck, pid); err != nil {
+								logger.Errorf(ctx, "[DELETE] TOOL-STREAM: Delete failed for projectId=%s, error=%v", pid, err)
+							} else {
+								logger.Debugf(ctx, "[DELETE] TOOL-STREAM: Delete request sent for projectId=%s", pid)
+							}
+						} else {
+							logger.Debugf(ctx, "[DELETE] TOOL-STREAM: Auto-delete disabled, skipping projectId=%s", pid)
+						}
+					}(projectId, cookie, openAIReq.Model, c)
+				} else if eventType == "message_field_delta" {
+					fieldName, _ := eventMap["field_name"].(string)
+					delta, _ := eventMap["delta"].(string)
+
+					if fieldName == "session_state.answer" ||
+						strings.Contains(fieldName, "session_state.streaming_detail_answer") {
+						chunk = delta
+						totalContent += delta
+					} else if strings.HasPrefix(fieldName, "session_state.layer_") ||
+						(config.ReasoningHide != 1 && fieldName == "session_state.answerthink") {
+						// Stream reasoning immediately
+						totalReasoning += delta
+						streamResp := model.OpenAIChatCompletionResponse{
+							ID:      responseId,
+							Object:  "chat.completion.chunk",
+							Created: time.Now().Unix(),
+							Model:   openAIReq.Model,
+							Choices: []model.OpenAIChoice{{
+								Index: 0,
+								Delta: &model.OpenAIDelta{
+									Role:             "assistant",
+									ReasoningContent: delta,
+									Reasoning:        delta,
+								},
+								FinishReason: nil,
+							}},
+						}
+						sendSSEvent(c, streamResp)
+					}
+				}
+
+				if chunk != "" {
+					// Feed chunk to parser
+					params, err := parser.Process(chunk)
+					if err != nil {
+						logger.Warnf(ctx, "Parser error: %v", err)
+						continue
+					}
+
+					for _, p := range params {
+						if p.Type == "content" {
+							// finishReason := "stop" // unused
+							streamResp := model.OpenAIChatCompletionResponse{
+								ID:      responseId,
+								Object:  "chat.completion.chunk",
+								Created: time.Now().Unix(),
+								Model:   openAIReq.Model,
+								Choices: []model.OpenAIChoice{{
+									Index: 0,
+									Delta: &model.OpenAIDelta{
+										Role:    "assistant",
+										Content: p.Content,
+									},
+									FinishReason: nil,
+								}},
+							}
+							sendSSEvent(c, streamResp)
+						} else if p.Type == "tool_call_inc" {
+							// Send tool call delta
+							delta := model.OpenAIDelta{
+								Role: "assistant", // only needed for first chunk? OpenAI handles it
+							}
+
+							toolDelta := model.OpenAIDeltaToolCall{
+								Index: 0,
+							}
+
+							if !toolCallSent {
+								toolDelta.ID = toolCallID
+								toolDelta.Type = "function"
+								toolDelta.Function = model.OpenAIDeltaToolCallFunction{
+									Name:      p.Tool,
+									Arguments: "", // First chunk might just be ID/Name?
+									// StreamParser doesn't separate name emission cleanly from args start
+									// But p.Tool is available.
+									// Use p.Content as arguments delta
+								}
+								// If p.Content is the start of arguments, we include it
+								toolDelta.Function.Arguments = p.Content
+								toolCallSent = true
+							} else {
+								toolDelta.Function = model.OpenAIDeltaToolCallFunction{
+									Arguments: p.Content,
+								}
+							}
+
+							delta.ToolCalls = []model.OpenAIDeltaToolCall{toolDelta}
+
+							streamResp := model.OpenAIChatCompletionResponse{
+								ID:      responseId,
+								Object:  "chat.completion.chunk",
+								Created: time.Now().Unix(),
+								Model:   openAIReq.Model,
+								Choices: []model.OpenAIChoice{{
+									Index:        0,
+									Delta:        &delta,
+									FinishReason: nil,
+								}},
+							}
+							sendSSEvent(c, streamResp)
+						}
 					}
 				}
 			}
@@ -2163,91 +2463,62 @@ func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie
 				continue
 			}
 
-			content := fullContent.String()
-			if content == "" {
-				continue
+			// If we got here and sseChan closed without rate limit, check if we actually got anything?
+			// Assuming successful completion if no rate limit/error triggers.
+
+			// Done
+			// We might want to send a final chunk with FinishReason if not sent?
+			// But determining correct FinishReason (stop or tool_calls) depends on what we sent.
+			// If we sent tool calls, verify if we finished.
+			// Given it's streaming, client usually infers from [DONE].
+			// Or we send an empty chunk with FinishReason.
+
+			finishReason := "stop"
+			if parser.ResponseType == "tool_call" {
+				finishReason = "tool_calls"
 			}
 
-			// Parse the complete response
-			toolResp, err := tooluse.ParseToolCallFromText(content)
-			if err != nil {
-				// Model didn't follow the format - fallback to regular response
-				logger.Warnf(ctx, "Model did not follow tool format in stream, returning as regular response: %v", err)
-
-				finishReason := "stop"
-				streamResp := model.OpenAIChatCompletionResponse{
-					ID:      responseId,
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   openAIReq.Model,
-					Choices: []model.OpenAIChoice{{
-						Index: 0,
-						Delta: model.OpenAIDelta{
-							Role:    "assistant",
-							Content: content,
-						},
-						FinishReason: &finishReason,
-					}},
-				}
-				sendSSEvent(c, streamResp)
-				c.SSEvent("", " [DONE]")
-				return false
+			streamResp := model.OpenAIChatCompletionResponse{
+				ID:      responseId,
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   openAIReq.Model,
+				Choices: []model.OpenAIChoice{{
+					Index:        0,
+					Delta:        &model.OpenAIDelta{},
+					FinishReason: &finishReason,
+				}},
 			}
+			sendSSEvent(c, streamResp)
+			// Send Usage
+			promptTokens := common.CountTokenText(string(jsonData), openAIReq.Model)
+			completionTokens := common.CountTokenText(totalContent, openAIReq.Model)
+			reasoningTokens := common.CountTokenText(totalReasoning, openAIReq.Model)
 
-			if tooluse.IsToolCallResponse(toolResp) {
-				toolCall, err := tooluse.ConvertToOpenAIToolCall(toolResp)
-				if err != nil {
-					return false
-				}
-
-				// Send tool call as streaming chunks
-				finishReason := "tool_calls"
-				streamResp := model.OpenAIChatCompletionResponse{
-					ID:      responseId,
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   openAIReq.Model,
-					Choices: []model.OpenAIChoice{{
-						Index: 0,
-						Delta: model.OpenAIDelta{
-							Role: "assistant",
-							ToolCalls: []model.OpenAIDeltaToolCall{{
-								Index: 0,
-								ID:    toolCall.ID,
-								Type:  "function",
-								Function: model.OpenAIDeltaToolCallFunction{
-									Name:      toolCall.Function.Name,
-									Arguments: toolCall.Function.Arguments,
-								},
-							}},
-						},
-						FinishReason: &finishReason,
-					}},
-				}
-				sendSSEvent(c, streamResp)
-			} else {
-				// Send content as streaming chunks
-				finishReason := "stop"
-				streamResp := model.OpenAIChatCompletionResponse{
-					ID:      responseId,
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   openAIReq.Model,
-					Choices: []model.OpenAIChoice{{
-						Index: 0,
-						Delta: model.OpenAIDelta{
-							Role:    "assistant",
-							Content: toolResp.Content,
-						},
-						FinishReason: &finishReason,
-					}},
-				}
-				sendSSEvent(c, streamResp)
+			usageResp := model.OpenAIChatCompletionResponse{
+				ID:      responseId,
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   openAIReq.Model,
+				Choices: []model.OpenAIChoice{},
+				Usage: &model.OpenAIUsage{
+					PromptTokens:     promptTokens,
+					CompletionTokens: completionTokens + reasoningTokens, // Total completion tokens includes reasoning if we want to follow standard, or maybe just content? usually total = prompt + completion. OpenAI puts reasoning tokens INSIDE completion tokens count or purely separate?
+					// OpenAI: completion_tokens includes reasoning_tokens.
+					TotalTokens: promptTokens + completionTokens + reasoningTokens,
+					CompletionTokensDetails: &model.OpenAICompletionTokensDetails{
+						ReasoningTokens: reasoningTokens,
+					},
+				},
 			}
-
+			sendSSEvent(c, usageResp)
 			c.SSEvent("", " [DONE]")
+
 			return false
 		}
+
+		logger.Errorf(ctx, "All cookies exhausted in stream")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "All cookies are temporarily unavailable."})
 		return false
 	})
 }
@@ -2258,5 +2529,48 @@ func safeClose(client cycletls.CycleTLS) {
 	}
 	if client.RespChan != nil {
 		close(client.RespChan)
+	}
+}
+
+func checkLogin(c *gin.Context, client cycletls.CycleTLS, cookie string) {
+	logger.Debug(c.Request.Context(), "Checking login status...")
+	resp, err := client.Do(loginEndpoint, cycletls.Options{
+		Timeout: 30,
+		Proxy:   config.ProxyUrl,
+		Method:  "GET",
+		Headers: map[string]string{
+			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
+			"Cookie":     cookie,
+		},
+	}, "GET")
+
+	if err != nil {
+		// Log error but don't block the flow if check fails
+		logger.Errorf(c.Request.Context(), "checkLogin request failed: %v", err)
+		return
+	}
+
+	if resp.Status != 200 {
+		logger.Warnf(c.Request.Context(), "checkLogin returned status: %d, body: %s", resp.Status, resp.Body)
+		return
+	}
+
+	var loginResp model.GensparkLoginResponse
+	if err := json.Unmarshal([]byte(resp.Body), &loginResp); err != nil {
+		logger.Errorf(c.Request.Context(), "checkLogin unmarshal failed: %v, body: %s", err, resp.Body)
+		return
+	}
+
+	cogenEmail := "unknown"
+	if loginResp.Data.CogenEmail != "" {
+		cogenEmail = loginResp.Data.CogenEmail
+	} else if loginResp.Data.CogenName != "" {
+		cogenEmail = loginResp.Data.CogenName
+	}
+
+	if loginResp.Data.IsLogin {
+		logger.Debugf(c.Request.Context(), "Login check success. Account: %s, ID: %s", cogenEmail, loginResp.Data.CogenID)
+	} else {
+		logger.Warnf(c.Request.Context(), "Login check failed (not logged in). Account: %s, ID: %s", cogenEmail, loginResp.Data.CogenID)
 	}
 }

@@ -9,13 +9,14 @@ import (
 	"genspark2api/common/config"
 	logger "genspark2api/common/loggger"
 	"genspark2api/model"
-	"github.com/deanxv/CycleTLS/cycletls"
-	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/deanxv/CycleTLS/cycletls"
+	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 )
 
 func VideosForOpenAI(c *gin.Context) {
@@ -184,11 +185,15 @@ func VideoProcess(c *gin.Context, client cycletls.CycleTLS, openAIReq model.Vide
 		if len(result.Data) > 0 {
 			// Delete temporary session if needed
 			if config.AutoDelChat == 1 {
-				go func() {
-					client := cycletls.Init()
-					defer safeClose(client)
-					makeDeleteRequest(client, cookie, projectId)
-				}()
+				go func(pid string, ck string, gc *gin.Context) {
+					ctx := gc.Request.Context()
+					logger.Infof(ctx, "[DELETE] VIDEO: Auto-delete enabled, projectId=%s", pid)
+					delClient := cycletls.Init()
+					defer safeClose(delClient)
+					if _, err := makeDeleteRequest(gc, delClient, ck, pid); err != nil {
+						logger.Errorf(ctx, "[DELETE] VIDEO: Delete failed for projectId=%s, error=%v", pid, err)
+					}
+				}(projectId, cookie, c)
 			}
 			return result, nil
 		}
