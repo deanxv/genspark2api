@@ -95,3 +95,43 @@ func TestStreamParser_Process_Escaped(t *testing.T) {
 		t.Errorf("Expected content %q, got %q", expected, content.String())
 	}
 }
+
+func TestStreamParser_Process_TextToolCall(t *testing.T) {
+	parser := NewStreamParser()
+
+	// Text format: [Assistant called tools]:\n- tool_name({"arg":"val"})\n
+	chunks := []string{
+		"[Assistant called tools]:\n",
+		"- read_file",
+		"(",
+		`{"path":"test.go"}`,
+		")\n",
+	}
+
+	var actualArgs strings.Builder
+	var toolName string
+
+	for _, chunk := range chunks {
+		events, err := parser.Process(chunk)
+		if err != nil {
+			t.Fatalf("Process error: %v", err)
+		}
+		for _, e := range events {
+			if e.Type == "tool_call_inc" {
+				actualArgs.WriteString(e.Content)
+				if e.Tool != "" {
+					toolName = e.Tool
+				}
+			}
+		}
+	}
+
+	if toolName != "read_file" {
+		t.Errorf("Expected tool name read_file, got %q", toolName)
+	}
+
+	expectedArgs := `{"path":"test.go"}`
+	if actualArgs.String() != expectedArgs {
+		t.Errorf("Expected args %q, got %q", expectedArgs, actualArgs.String())
+	}
+}

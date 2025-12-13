@@ -8,14 +8,17 @@ type ParserState int
 
 const (
 	StateInit ParserState = iota
-	// We are searching for a key in the main object
+	// JSON States
 	StateInObject
-	// We are reading a key string
 	StateInKey
-	// We have read a key, waiting for colon
 	StateColon
-	// We are reading a value
 	StateInValue
+
+	// Text States
+	StateTextDetecting
+	StateTextFindingTool
+	StateTextReadingName
+	StateTextReadingArgs
 )
 
 type StreamParser struct {
@@ -35,11 +38,12 @@ type StreamParser struct {
 	ToolName     string
 
 	// Buffering
-	tempBuffer strings.Builder // for keys and "type" value
+	tempBuffer strings.Builder // for keys, values, and text buffering
+	textBuffer strings.Builder // for accumulating full text prefix
 }
 
 type ParseEvent struct {
-	Type    string // "content" or "tool_call_inc"
+	Type    string // "content", "tool_call_inc", "tool_call_start"
 	Content string
 	Tool    string
 }
@@ -55,14 +59,37 @@ func (sp *StreamParser) Process(chunk string) ([]ParseEvent, error) {
 	var events []ParseEvent
 
 	for _, char := range chunk {
+		// --- State Init Handling ---
+		if sp.state == StateInit {
+			if char == ' ' || char == '\n' || char == '\r' || char == '\t' {
+				continue
+			}
+			if char == '{' {
+				sp.state = StateInObject
+				sp.stackDepth = 1
+				continue
+			} else {
+				// Assume text format start
+				sp.state = StateTextDetecting
+				sp.textBuffer.WriteRune(char)
+				// check if it matches prefix so far
+				continue
+			}
+		}
+
+		// --- Text Format Handling ---
+		if sp.state >= StateTextDetecting {
+			events = append(events, sp.processTextChar(char)...)
+			continue
+		}
+
+		// --- JSON Format Handling ---
 		prevDepth := sp.stackDepth
 
-		// --- String State Handling ---
+		// String State Handling
 		if sp.inString {
 			if sp.isEscaped {
 				sp.isEscaped = false
-
-				// Handle specific captures
 				if sp.state == StateInKey {
 					sp.tempBuffer.WriteRune(char)
 				} else if sp.state == StateInValue {
@@ -94,10 +121,12 @@ func (sp *StreamParser) Process(chunk string) ([]ParseEvent, error) {
 								val = "\\" + string(char)
 							}
 							events = append(events, ParseEvent{Type: "content", Content: val})
+						} else if sp.ResponseType == "tool_call" {
+							// For JSON tool calls, we might want to capture content too?
+							// But based on existing logic, we only care about emitting raw JSON for arguments
 						}
 					}
 				}
-
 			} else {
 				if char == '\\' {
 					sp.isEscaped = true
@@ -135,9 +164,8 @@ func (sp *StreamParser) Process(chunk string) ([]ParseEvent, error) {
 					}
 				}
 			}
-
 		} else {
-			// --- Not Handle String ---
+			// Not Handle String
 			switch char {
 			case '{':
 				sp.stackDepth++
@@ -147,7 +175,6 @@ func (sp *StreamParser) Process(chunk string) ([]ParseEvent, error) {
 			case '}':
 				sp.stackDepth--
 				if sp.stackDepth == 1 {
-					// Closed inner object, back to outer object
 					sp.state = StateInObject
 				}
 			case '"':
@@ -167,16 +194,12 @@ func (sp *StreamParser) Process(chunk string) ([]ParseEvent, error) {
 			}
 		}
 
-		// --- Emission Logic for Arguments ---
+		// Emission Logic for Arguments (JSON mode)
 		if sp.ResponseType == "tool_call" {
-			// Rule: Everything inside arguments value is emitted as raw JSON
-			// Arguments value is the ONLY object at depth > 1 (assuming simplistic tool call structure)
 			shouldEmit := false
-
 			if sp.stackDepth > 1 {
 				shouldEmit = true
 			} else if sp.stackDepth == 1 && prevDepth == 2 {
-				// Just closed arguments object
 				shouldEmit = true
 			}
 
@@ -187,4 +210,79 @@ func (sp *StreamParser) Process(chunk string) ([]ParseEvent, error) {
 	}
 
 	return events, nil
+}
+
+func (sp *StreamParser) processTextChar(char rune) []ParseEvent {
+	var events []ParseEvent
+
+	switch sp.state {
+	case StateTextDetecting:
+		sp.textBuffer.WriteRune(char)
+		// We just accumulating until we hit a newline or something indicating tool list start
+		// The prefix is "[Assistant called tools]:"
+		// We can move to finding tool if we see '\n' or ':'
+		if char == '\n' {
+			sp.state = StateTextFindingTool
+			sp.textBuffer.Reset()
+		}
+
+	case StateTextFindingTool:
+		if char == '-' {
+			sp.state = StateTextReadingName
+			// consume space after dash if next char
+		}
+		// ignore other chars between tools
+
+	case StateTextReadingName:
+		if char == ' ' && sp.ToolName == "" {
+			// skip leading space
+			return nil
+		}
+		if char == '(' {
+			sp.ToolName = sp.tempBuffer.String()
+			sp.tempBuffer.Reset()
+			sp.state = StateTextReadingArgs
+			sp.ResponseType = "tool_call"
+			// Emit tool name discovery if needed?
+			// Current logic expects tool_call_inc logic to handle it
+		} else {
+			sp.tempBuffer.WriteRune(char)
+		}
+
+	case StateTextReadingArgs:
+		// We are inside (...)
+		// Arguments are JSON inside parens.
+		if char == ')' && sp.stackDepth == 0 && !sp.inString {
+			// End of args
+			sp.state = StateTextFindingTool
+			sp.ToolName = ""
+			sp.ResponseType = ""
+			return nil
+		}
+
+		// Track JSON structure to handle nested parens inside strings
+		if sp.inString {
+			if sp.isEscaped {
+				sp.isEscaped = false
+			} else {
+				if char == '\\' {
+					sp.isEscaped = true
+				} else if char == '"' {
+					sp.inString = false
+				}
+			}
+		} else {
+			if char == '"' {
+				sp.inString = true
+			} else if char == '{' {
+				sp.stackDepth++
+			} else if char == '}' {
+				sp.stackDepth--
+			}
+		}
+
+		events = append(events, ParseEvent{Type: "tool_call_inc", Content: string(char), Tool: sp.ToolName})
+	}
+
+	return events
 }

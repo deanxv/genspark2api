@@ -1216,11 +1216,11 @@ func processStreamData(c *gin.Context, data string, projectId *string, cookie, r
 		go func(pid string, ck string, mdl string, gc *gin.Context) {
 			ctx := gc.Request.Context()
 			if config.AutoModelChatMapType == 1 {
-				logger.Infof(ctx, "[DELETE] STREAM: Saving session instead of deleting, projectId=%s, model=%s", pid, mdl)
+				logger.Debugf(ctx, "[DELETE] STREAM: Saving session instead of deleting, projectId=%s, model=%s", pid, mdl)
 				config.GlobalSessionManager.AddSession(ck, mdl, pid)
 			} else {
 				if config.AutoDelChat == 1 {
-					logger.Infof(ctx, "[DELETE] STREAM: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
+					logger.Debugf(ctx, "[DELETE] STREAM: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
 					client := cycletls.Init()
 					defer safeClose(client)
 					if _, err := makeDeleteRequest(gc, client, ck, pid); err != nil {
@@ -2090,7 +2090,7 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 					go func(pid string, ck string, mdl string, gc *gin.Context) {
 						ctx := gc.Request.Context()
 						if config.AutoDelChat == 1 {
-							logger.Infof(ctx, "[DELETE] TOOL-USE: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
+							logger.Debugf(ctx, "[DELETE] TOOL-USE: Auto-delete enabled, projectId=%s, model=%s", pid, mdl)
 							delClient := cycletls.Init()
 							defer safeClose(delClient)
 							if _, err := makeDeleteRequest(gc, delClient, ck, pid); err != nil {
