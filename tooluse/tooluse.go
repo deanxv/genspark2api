@@ -91,6 +91,47 @@ YOUR RESPONSE MUST START WITH { AND END WITH } - NOTHING ELSE.`
 func ParseToolCallFromText(text string) (*ToolCallResponse, error) {
 	text = strings.TrimSpace(text)
 
+	// Check for text format: [Assistant called tools]:\n- tool_name(args)
+	if strings.HasPrefix(text, "[Assistant called tools]:") {
+		// Parse text format
+		lines := strings.Split(text, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "- ") && strings.Contains(line, "(") && strings.HasSuffix(line, ")") {
+				// Found tool call line: - tool_name(args)
+				startParen := strings.Index(line, "(")
+				endParen := strings.LastIndex(line, ")")
+
+				toolName := strings.TrimSpace(line[2:startParen])
+				argsStr := line[startParen+1 : endParen] // Keep the content inside parens
+
+				// Try to parse args as JSON or key=value...
+				// Arguments in text format might be JSON or "relaxed" JSON.
+				// Given the previous issue, let's assume valid JSON inside () for now,
+				// or try to wrap in {} if it looks like key: value list?
+				// Actually, earlier logs showed: - get_weather({"city": "Moscow"})
+				// So it might be valid JSON.
+
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+					// Logic to handle potential python-style args if needed,
+					// but for now let's hope it's JSON-ish or we failed.
+					// Fallback: try wrapping in braces if missing?
+					// Actually, let's assume it IS JSON for now based on "get_weather({...})"
+					return nil, fmt.Errorf("failed to parse arguments from text format: %w", err)
+				}
+
+				return &ToolCallResponse{
+					Type:      "tool_call",
+					Tool:      toolName,
+					Arguments: args,
+				}, nil
+			}
+		}
+		// If we found prefix but no valid tool line
+		return nil, fmt.Errorf("found tool call prefix but failed to parse tool line")
+	}
+
 	// Try to find JSON in the text
 	startIdx := strings.Index(text, "{")
 	endIdx := strings.LastIndex(text, "}")

@@ -62,6 +62,7 @@ var DebugEnabled = os.Getenv("DEBUG") == "true"
 // DEBUG_LOG_LEVEL=verbose|normal|minimal
 var DebugLogBody = os.Getenv("DEBUG_LOG_BODY") == "true"
 var DebugLogHeaders = os.Getenv("DEBUG_LOG_HEADERS") == "true"
+var DebugLogNetwork = os.Getenv("DEBUG_LOG_NETWORK") == "true"
 var DebugSavePayloads = os.Getenv("DEBUG_SAVE_PAYLOADS") == "true"
 var DebugLogLevel = env.String("DEBUG_LOG_LEVEL", "normal") // verbose, normal, minimal
 
@@ -463,6 +464,9 @@ func GetConfigSummary() []string {
 		}
 		if DebugLogHeaders {
 			lines = append(lines, "  DEBUG_LOG_HEADERS: enabled")
+		}
+		if DebugLogNetwork {
+			lines = append(lines, "  DEBUG_LOG_NETWORK: enabled")
 		}
 		if DebugSavePayloads {
 			lines = append(lines, "  DEBUG_SAVE_PAYLOADS: enabled")

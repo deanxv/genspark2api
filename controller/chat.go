@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -56,6 +57,18 @@ func ChatForOpenAI(c *gin.Context) {
 	defer safeClose(client)
 
 	var openAIReq model.OpenAIChatCompletionRequest
+
+	// Log request body if enabled
+	if config.DebugLogBody {
+		bodyBytes, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			logger.Errorf(c.Request.Context(), "Failed to read request body: %v", err)
+		} else {
+			logger.Debugf(c.Request.Context(), "Request Body: %s", string(bodyBytes))
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+	}
+
 	if err := c.BindJSON(&openAIReq); err != nil {
 		logger.Errorf(c.Request.Context(), err.Error())
 		c.JSON(http.StatusInternalServerError, model.OpenAIErrorResponse{
@@ -641,12 +654,16 @@ func handleMessageFieldDelta(c *gin.Context, event map[string]interface{}, respo
 
 	// 获取 delta 内容
 	var delta string
-	switch {
-	case (modelName == "o1" || modelName == "o3-mini-high") && fieldName == "session_state.answer":
-		delta, _ = event["field_value"].(string)
-	default:
-		delta, _ = event["delta"].(string)
+	var err error
+	// 优先尝试获取 delta
+	if d, ok := event["delta"].(string); ok && len(d) > 0 {
+		delta = d
+	} else if v, ok := event["field_value"].(string); ok {
+		// 如果没有 delta，尝试获取 field_value
+		delta = v
 	}
+
+	_ = err // fix unused
 
 	// 处理思考过程 - 使用 reasoning_content 字段 (OpenAI API 格式)
 	if config.ReasoningHide != 1 {
@@ -773,7 +790,7 @@ func makeRequest(client cycletls.CycleTLS, jsonData []byte, cookie string, isStr
 		accept = "text/event-stream"
 	}
 
-	return client.Do(apiEndpoint, cycletls.Options{
+	options := cycletls.Options{
 		Timeout: 10 * 60 * 60,
 		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
 		Body:    string(jsonData),
@@ -786,7 +803,22 @@ func makeRequest(client cycletls.CycleTLS, jsonData []byte, cookie string, isStr
 			"Cookie":       cookie,
 			"User-Agent":   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
 		},
-	}, "POST")
+	}
+
+	if config.DebugLogNetwork {
+		logger.Debugf(context.Background(), "\n=== OUTGOING REQUEST ===\nURL: %s\nHeaders: %v\nBody: %s\n========================", apiEndpoint, options.Headers, options.Body)
+	}
+
+	response, err := client.Do(apiEndpoint, options, "POST")
+	if err != nil {
+		return response, err
+	}
+
+	if config.DebugLogNetwork {
+		logger.Debugf(context.Background(), "\n=== INCOMING RESPONSE ===\nStatus: %d\nBody: %s\n=========================", response.Status, response.Body)
+	}
+
+	return response, nil
 }
 
 // makeRequest 发送HTTP请求
@@ -1256,6 +1288,10 @@ func makeStreamRequest(c *gin.Context, client cycletls.CycleTLS, jsonData []byte
 	}
 
 	logger.Debug(c.Request.Context(), fmt.Sprintf("cookie: %v", cookie))
+
+	if config.DebugLogNetwork {
+		logger.Debugf(c.Request.Context(), "\n=== OUTGOING STREAM REQUEST ===\nURL: %s\nHeaders: %v\nBody: %s\n===============================", apiEndpoint, options.Headers, options.Body)
+	}
 
 	sseChan, err := client.DoSSE(apiEndpoint, options, "POST")
 	if err != nil {
@@ -1888,6 +1924,21 @@ func pollTaskStatus(c *gin.Context, client cycletls.CycleTLS, taskIDs []string, 
 		return imageURLs
 	}
 
+	// Log outgoing request if network logging is enabled
+	if config.DebugLogNetwork {
+		logger.Debugf(context.Background(), "\n=== OUTGOING REQUEST ===\nURL: %s\nMethod: POST\nHeaders: %v\nBody: %s\n========================",
+			"https://www.genspark.ai/api/ig_tasks_status", // Assuming this URL or checking helper
+			map[string]string{
+				"Content-Type": "application/json",
+				"Accept":       "*/*",
+				"Origin":       baseURL,
+				"Referer":      baseURL + "/",
+				"Cookie":       cookie,
+				"User-Agent":   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome",
+			},
+			string(jsonData))
+	}
+
 	sseChan, err := client.DoSSE("https://www.genspark.ai/api/ig_tasks_status", cycletls.Options{
 		Timeout: 10 * 60 * 60,
 		Proxy:   config.ProxyUrl, // 在每个请求中设置代理
@@ -2075,14 +2126,16 @@ func handleToolUseNonStreamRequest(c *gin.Context, client cycletls.CycleTLS, coo
 					logger.Debugf(ctx, "Project started: %s", projectId)
 				}
 				if parsedResponse.Type == "message_field_delta" {
+					logger.Debugf(ctx, "Field Delta: Name=%s, Delta=%s", parsedResponse.FieldName, parsedResponse.Delta)
 					if parsedResponse.FieldName == "session_state.answer" ||
-						strings.Contains(parsedResponse.FieldName, "session_state.streaming_detail_answer") {
+						strings.Contains(parsedResponse.FieldName, "session_state.streaming_detail_answer") ||
+						parsedResponse.FieldName == "content" {
 						content = content + parsedResponse.Delta
 					}
 				}
 				if parsedResponse.Type == "message_field" {
-					if (openAIReq.Model == "o1" || openAIReq.Model == "o3-mini-high") &&
-						parsedResponse.FieldName == "session_state.answer" {
+					logger.Debugf(ctx, "Field Value: Name=%s, Value=%s", parsedResponse.FieldName, parsedResponse.FieldValue)
+					if parsedResponse.FieldName == "session_state.answer" || parsedResponse.FieldName == "content" {
 						content = parsedResponse.FieldValue
 					}
 				}
@@ -2313,8 +2366,12 @@ func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie
 				// Need to parse generic map first to check type and id
 				var eventMap map[string]interface{}
 				if err := json.Unmarshal([]byte(data), &eventMap); err != nil {
-					logger.Debugf(ctx, "Failed to unmarshal event: %v", err)
+					logger.Errorf(c.Request.Context(), "[ERROR] Failed to unmarshal event: %v | Data: %s", err, data[6:])
 					continue
+				}
+
+				if config.DebugLogBody {
+					logger.Debugf(c.Request.Context(), "[DEBUG] Stream Event: %+v", eventMap)
 				}
 
 				eventType, _ := eventMap["type"].(string)
@@ -2353,12 +2410,20 @@ func handleToolUseStreamRequest(c *gin.Context, client cycletls.CycleTLS, cookie
 							logger.Debugf(ctx, "[DELETE] TOOL-STREAM: Auto-delete disabled, skipping projectId=%s", pid)
 						}
 					}(projectId, cookie, openAIReq.Model, c)
-				} else if eventType == "message_field_delta" {
+				} else if eventType == "message_field" || eventType == "message_field_delta" {
 					fieldName, _ := eventMap["field_name"].(string)
 					delta, _ := eventMap["delta"].(string)
 
+					// If delta is empty, try field_value (some models use this for content updates)
+					if delta == "" {
+						if val, ok := eventMap["field_value"].(string); ok {
+							delta = val
+						}
+					}
+
 					if fieldName == "session_state.answer" ||
-						strings.Contains(fieldName, "session_state.streaming_detail_answer") {
+						strings.Contains(fieldName, "session_state.streaming_detail_answer") ||
+						fieldName == "content" { // Also check for direct "content" field
 						chunk = delta
 						totalContent += delta
 					} else if strings.HasPrefix(fieldName, "session_state.layer_") ||
