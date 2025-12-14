@@ -66,6 +66,9 @@ var DebugLogNetwork = os.Getenv("DEBUG_LOG_NETWORK") == "true"
 var DebugSavePayloads = os.Getenv("DEBUG_SAVE_PAYLOADS") == "true"
 var DebugLogLevel = env.String("DEBUG_LOG_LEVEL", "normal") // verbose, normal, minimal
 
+// Tool calling (function calling) support - enabled by default
+var ToolCallingEnabled = env.Int("TOOL_CALLING_ENABLED", 1) == 1
+
 var RateLimitKeyExpirationDuration = 20 * time.Minute
 
 var RequestOutTimeDuration = 5 * time.Minute
@@ -530,6 +533,13 @@ func GetConfigSummary() []string {
 		lines = append(lines, "YES_CAPTCHA_CLIENT_KEY: configured")
 	} else {
 		lines = append(lines, "YES_CAPTCHA_CLIENT_KEY: not set")
+	}
+
+	// Tool calling (function calling)
+	if ToolCallingEnabled {
+		lines = append(lines, "TOOL_CALLING_ENABLED: enabled (1)")
+	} else {
+		lines = append(lines, "TOOL_CALLING_ENABLED: disabled (0)")
 	}
 
 	// Timezone

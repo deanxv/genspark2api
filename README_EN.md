@@ -25,7 +25,7 @@ _If you find this interesting, don't forget to give it a ⭐_
 - 🔄 **OpenAI API Compatible**: Direct integration with any OpenAI-compatible clients/middleware
 - 🛡️ **Smart Protection Bypass**: Built-in Cloudflare and ReCaptcha v3 handling logic (requires configuration per documentation)
 - 🔀 **Multi-Cookie Pool Rotation**: Automatic load distribution across multiple accounts with failover retry
-- 🔧 **Tool Calling Support**: Support for OpenAI-style function calling
+- 🔧 **Tool Calling Support**: Support for OpenAI-style function calling (can be disabled via `TOOL_CALLING_ENABLED=0`)
 - 🌐 **Web Search**: Add `-search` suffix to model name to enable web search (e.g., `gpt-5.1-search`)
 - 📊 **Streaming Response**: SSE streaming output with experience identical to official OpenAI API
 

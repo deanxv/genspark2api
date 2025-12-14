@@ -25,7 +25,7 @@ _觉得有点意思的话 别忘了点个 ⭐_
 - 🔄 **OpenAI API 兼容**：可直接接入任何兼容 OpenAI 的客户端/中间件
 - 🛡️ **智能防护绕过**：内置 Cloudflare 与 ReCaptcha v3 相关处理逻辑（需按文档配置）
 - 🔀 **多 Cookie 池轮询**：自动在多个账号之间分流，请求失败自动切换重试
-- 🔧 **Tool Calling 支持**：支持 OpenAI 风格的工具调用（function calling）
+- 🔧 **Tool Calling 支持**：支持 OpenAI 风格的工具调用（function calling），可通过 `TOOL_CALLING_ENABLED=0` 关闭
 - 🌐 **联网搜索**：模型名后加 `-search` 即可开启联网搜索（如: `gpt-5.1-search`）
 - 📊 **流式响应**：支持 SSE 流式输出，体验与官方 OpenAI 接口一致
 

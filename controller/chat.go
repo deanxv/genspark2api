@@ -199,10 +199,14 @@ func ChatForOpenAI(c *gin.Context) {
 	}
 
 	// Check if tools are provided and handle tool-use mode
-	hasTools := len(openAIReq.Tools) > 0
+	// Only enable tool-use if TOOL_CALLING_ENABLED=1 (default)
+	hasTools := config.ToolCallingEnabled && len(openAIReq.Tools) > 0
 	if hasTools {
 		handleToolUseRequest(c, client, cookie, cookieManager, &openAIReq, isSearchModel)
 		return
+	} else if len(openAIReq.Tools) > 0 && !config.ToolCallingEnabled {
+		// Tools provided but tool calling is disabled - log warning and proceed as regular chat
+		logger.Warnf(c.Request.Context(), "Tools provided in request but TOOL_CALLING_ENABLED=0, ignoring tools")
 	}
 
 	requestBody, err := createRequestBody(c, client, cookie, &openAIReq)
@@ -368,7 +372,7 @@ func createRequestBody(c *gin.Context, client cycletls.CycleTLS, cookie string, 
 	if config.PRE_MESSAGES_JSON != "" {
 		err := openAIReq.PrependMessagesFromJSON(config.PRE_MESSAGES_JSON)
 		if err != nil {
-			return nil, fmt.Errorf("PrependMessagesFromJSON err: %v PrependMessagesFromJSON:", err, config.PRE_MESSAGES_JSON)
+			return nil, fmt.Errorf("PrependMessagesFromJSON err: %v, PRE_MESSAGES_JSON: %s", err, config.PRE_MESSAGES_JSON)
 		}
 	}
 
