@@ -7,7 +7,7 @@
 
 _觉得有点意思的话 别忘了点个 ⭐_
 
-<a href="https://t.me/+LGKwlC_xa-E5ZDk9">
+<a href="https://t.me/+raL5ppEzDIFmZTY1">
   <img src="https://img.shields.io/badge/Telegram-AI Wave交流群-0088cc?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram 交流群" />
 </a>
 
